@@ -1,1 +1,123 @@
+# ========================================
+# Environment & Secrets (VIKTIGT!)
+# ========================================
+.env
+.env.local
+.env.*.local
+*.env
 
+# API keys and credentials
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# LangSmith / Observability traces
+.langsmith/
+langsmith_traces/
+*.langsmith.json
+traces/
+
+# ========================================
+# Python
+# ========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+ENV/
+
+# ========================================
+# IDE & Editors
+# ========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ========================================
+# Testing & Coverage
+# ========================================
+.coverage
+htmlcov/
+.tox/
+.nox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# ========================================
+# Jupyter & Notebooks
+# ========================================
+.ipynb_checkpoints
+*.ipynb
+
+# ========================================
+# Logs & Temporary files
+# ========================================
+*.log
+logs/
+tmp/
+temp/
+
+# ========================================
+# Project specific (AI / LangGraph)
+# ========================================
+data/
+outputs/
+reports/
+checkpoints/
+models/
+*.bin
+*.pt
+*.pth
+*.h5
+
+# Streamlit
+.streamlit/
+
+# Docker (om du använder det senare)
+.dockerignore
+.docker/
+
+# Large files
+*.zip
+*.tar.gz
+*.tgz
