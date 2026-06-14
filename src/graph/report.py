@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from config import APPROVAL_THRESHOLD
 from schemas.response import AgentResponse
 from schemas.fix_response import FixResponse
+from utils.code_splitter import finding_names_function
 
 _SEP = "-" * 60
 _MODULE_LEVEL = "MODULE LEVEL"
@@ -21,21 +22,10 @@ def _severity_label(severity: int) -> str:
     return "Clean — no issues found"
 
 
-def _names_function(func_name: str, finding: str) -> bool:
-    return (
-        f"{func_name}(" in finding
-        or f"{func_name}:" in finding
-        or f"{func_name}/" in finding
-        or f"'{func_name}'" in finding
-        or f'"{func_name}"' in finding
-        or finding.startswith(func_name + " ")
-    )
-
-
 def _route_finding(finding: str, locations: List[str]) -> str:
     """Return the bare function name this finding belongs to, or _MODULE_LEVEL."""
     for loc in locations:
-        if loc and _names_function(loc, finding):
+        if loc and finding_names_function(loc, finding):
             return loc
     if len(locations) == 1:
         return locations[0] or _MODULE_LEVEL

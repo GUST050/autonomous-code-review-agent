@@ -119,9 +119,10 @@ class TestRetryBackoff:
         ), patch("agents.base_agent.time.sleep"):
             result = agent.invoke("hello", max_retries=3)
 
-        # After exhausting retries, returns fallback AgentResponse
+        # After exhausting retries, returns fallback AgentResponse with no findings
         assert result.severity == 0
-        assert any("429" in f or "attempts" in f for f in result.findings)
+        assert result.findings == []
+        assert "429" in result.reasoning or "attempts" in result.reasoning
 
     def test_backoff_capped_at_max_delay(self):
         """Very high attempt count must not exceed _RATE_LIMIT_MAX_DELAY."""
@@ -199,7 +200,8 @@ class TestTimeoutRetry:
             result = agent.invoke("hello", max_retries=3)
 
         assert result.severity == 0
-        assert any("timed out" in f.lower() or "attempts" in f.lower() for f in result.findings)
+        assert result.findings == []
+        assert "timed out" in result.reasoning.lower() or "attempts" in result.reasoning.lower()
 
     def test_timeout_warning_logged(self):
         agent = _make_agent()

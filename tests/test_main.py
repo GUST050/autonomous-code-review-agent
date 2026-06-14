@@ -85,7 +85,7 @@ class TestPromptAcceptFixes:
 
 class TestBuildLlm:
     def test_anthropic_config_returns_chat_anthropic(self):
-        with patch("main.ChatAnthropic") as mock:
+        with patch("review.ChatAnthropic") as mock:
             _build_llm(CLAUDE_HAIKU)
         mock.assert_called_once_with(
             model=CLAUDE_HAIKU.model,
@@ -94,7 +94,7 @@ class TestBuildLlm:
         )
 
     def test_xai_config_returns_chat_xai(self):
-        with patch("main.ChatXAI") as mock:
+        with patch("review.ChatXAI") as mock:
             _build_llm(GROK_MINI)
         mock.assert_called_once_with(
             model=GROK_MINI.model,
@@ -103,7 +103,7 @@ class TestBuildLlm:
         )
 
     def test_openai_config_returns_chat_openai(self):
-        with patch("main.ChatOpenAI") as mock:
+        with patch("review.ChatOpenAI") as mock:
             _build_llm(GPT4O_MINI)
         mock.assert_called_once_with(
             model=GPT4O_MINI.model,
@@ -120,7 +120,7 @@ class TestBuildLlm:
             input_cost_per_million=1.0,
             output_cost_per_million=1.0,
         )
-        with patch("main.ChatOpenAI") as mock:
+        with patch("review.ChatOpenAI") as mock:
             _build_llm(cfg)
         mock.assert_called_once()
 

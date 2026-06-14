@@ -70,6 +70,31 @@ def split_code(source: str) -> List[CodeSection]:
     return sections
 
 
+def finding_names_function(func_name: str, finding: str) -> bool:
+    """
+    Return True if a finding string explicitly mentions a specific function.
+
+    Matches structured patterns only — never plain substring — so short names
+    like 'd' or 'x' cannot accidentally match arbitrary English text.
+
+    Supported patterns:
+      "{name}("   → "login("        Injection/Auth/Secrets agents
+      "'{name}'"  → "'proc'"        Quality agent
+      '"{name}"'  → rare but handled
+      "{name}:"   → "find_admins:"  Performance agent
+      "{name}/"   → compound names
+      "{name} "   → space-delimited fallback
+    """
+    return (
+        f"{func_name}(" in finding
+        or f"'{func_name}'" in finding
+        or f'"{func_name}"' in finding
+        or f"{func_name}:" in finding
+        or f"{func_name}/" in finding
+        or finding.startswith(func_name + " ")
+    )
+
+
 def trailing_whitespace(source: str) -> str:
     """Return the trailing newlines of a section source (blank lines between defs)."""
     stripped = source.rstrip("\n")

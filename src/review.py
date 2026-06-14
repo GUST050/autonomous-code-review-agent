@@ -22,12 +22,15 @@ from agents import (
 from config import AGENT_CONFIGS, FIX_GENERATOR_FAST
 from graph import create_review_graph
 from runner import ReviewRunner
+from schemas.fix_response import FixResponse
+from schemas.response import AgentResponse
 from utils.token_tracker import TokenTracker
 
 logger = logging.getLogger(__name__)
 
 
 def _build_llm(config):
+    """Instantiate the correct LLM provider from a ModelConfig."""
     if config.provider == "anthropic":
         return ChatAnthropic(
             model=config.model,
@@ -77,7 +80,7 @@ def run_review(code: str, fix: bool = False) -> dict:
     return ReviewRunner(graph).run(code, fix=fix)
 
 
-def run_fix(code: str, findings_data: Dict[str, dict]) -> "FixResponse":
+def run_fix(code: str, findings_data: Dict[str, dict]) -> FixResponse:
     """
     Run only the fix agent using pre-computed review findings.
 
@@ -89,19 +92,16 @@ def run_fix(code: str, findings_data: Dict[str, dict]) -> "FixResponse":
     keyed by agent name, each value a dict with 'findings', 'severity',
     'confidence', 'locations', 'reasoning'.
     """
-    from schemas.fix_response import FixResponse
-    from schemas.response import AgentResponse
-
-    # Reconstruct proper AgentResponse objects from the serialized data.
-    agent_results: Dict[str, Optional[AgentResponse]] = {}
-    for agent_name, data in findings_data.items():
-        agent_results[agent_name] = AgentResponse(
+    agent_results: Dict[str, Optional[AgentResponse]] = {
+        agent_name: AgentResponse(
             reasoning=data.get("reasoning", "Restored from previous review"),
             findings=data.get("findings", []),
             severity=data.get("severity", 0),
             confidence=data.get("confidence", 0),
             locations=data.get("locations", []),
         )
+        for agent_name, data in findings_data.items()
+    }
 
     cfg = AGENT_CONFIGS
     fix_agent = FixGeneratorAgent(

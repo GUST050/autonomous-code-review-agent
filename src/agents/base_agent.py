@@ -131,8 +131,8 @@ class BaseAgent(ABC):
                 unfixable=[f"Fix generation failed after {max_retries} attempts: {last_error}"],
             )
         return AgentResponse(
-            reasoning="Failed to get structured response from LLM.",
-            findings=[f"Error after {max_retries} attempts: {last_error}"],
+            reasoning=f"Agent unavailable after {max_retries} attempts: {last_error}",
+            findings=[],
             severity=0,
             confidence=0,
         )

@@ -1,6 +1,8 @@
+import argparse
 import logging
 import sys
-import argparse
+from pathlib import Path
+from typing import Optional
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -11,18 +13,14 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-from typing import Optional
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
-from langchain_xai import ChatXAI
-from pathlib import Path
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from agents import InjectionAgent, AuthAgent, SecretsAgent, QualityAgent, PerformanceAgent, FixGeneratorAgent
 from config import AGENT_CONFIGS, APPROVAL_THRESHOLD, FIX_GENERATOR_FAST
 from graph import create_review_graph
+from review import _build_llm
 from runner import ReviewRunner
 from utils import TokenTracker, combined_report, read_from_file, read_from_git_diff
 
@@ -69,15 +67,6 @@ def load_code(args: argparse.Namespace) -> tuple[str, str]:
     if args.diff:
         return read_from_git_diff()
     return _DEMO_CODE, "Demo (hardcoded test code)"
-
-
-def _build_llm(config):
-    """Instantiate the correct LLM provider based on config.provider."""
-    if config.provider == "anthropic":
-        return ChatAnthropic(model=config.model, temperature=config.temperature, max_tokens=config.max_tokens)
-    if config.provider == "xai":
-        return ChatXAI(model=config.model, temperature=config.temperature, max_tokens=config.max_tokens)
-    return ChatOpenAI(model=config.model, temperature=config.temperature, max_tokens=config.max_tokens)
 
 
 def build_agents() -> tuple[list, FixGeneratorAgent, list[TokenTracker]]:

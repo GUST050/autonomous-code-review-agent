@@ -29,7 +29,7 @@ from config import APPROVAL_THRESHOLD, FIX_MAX_WORKERS
 from schemas.response import AgentResponse
 from schemas.fix_response import FixResponse
 from schemas.function_fix_response import FunctionFixResponse
-from utils.code_splitter import CodeSection, split_code, trailing_whitespace
+from utils.code_splitter import CodeSection, split_code, trailing_whitespace, finding_names_function
 from utils.token_tracker import TokenTracker
 from ..base_agent import BaseAgent
 
@@ -38,29 +38,6 @@ logger = logging.getLogger(__name__)
 # Findings tuple: (agent_name, finding_text, severity)
 _Finding = Tuple[str, str, int]
 
-
-def _names_function(func_name: str, finding: str) -> bool:
-    """
-    Return True if the finding text explicitly names this function.
-
-    Checks structured patterns only — never plain substring — so single-letter
-    names like 'd' or 'x' cannot accidentally match arbitrary English text.
-
-    Supported patterns (covering all known agent output styles):
-      "{name}("   → "login("         used by Injection/Auth/Secrets agents
-      "'{name}'"  → "'proc'"         used by Quality agent
-      '"{name}"'  → rare but handled
-      "{name}:"   → "find_admins:"   used by Performance agent
-      "{name} "   → "find_admins "   fallback for space-delimited names
-    """
-    return (
-        f"{func_name}(" in finding
-        or f"'{func_name}'" in finding
-        or f'"{func_name}"' in finding
-        or f"{func_name}:" in finding
-        or f"{func_name}/" in finding
-        or finding.startswith(func_name + " ")
-    )
 
 
 _FUNCTION_SYSTEM_PROMPT = """\
@@ -375,7 +352,7 @@ class FixGeneratorAgent(BaseAgent):
 
             for finding in result.findings:
                 matched_keys = [
-                    key for key in known_locations if _names_function(key, finding)
+                    key for key in known_locations if finding_names_function(key, finding)
                 ]
 
                 if matched_keys:

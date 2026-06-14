@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agents.fix.fix_agent import FixGeneratorAgent, _names_function
+from agents.fix.fix_agent import FixGeneratorAgent
+from utils.code_splitter import finding_names_function as _names_function
 from schemas.response import AgentResponse
 from utils.code_splitter import CodeSection
 
