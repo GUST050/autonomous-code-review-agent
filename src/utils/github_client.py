@@ -218,6 +218,13 @@ class GitHubClient:
 
     # ── PR metadata ───────────────────────────────────────────────────────
 
+    def get_commit_message(self, repo: str, sha: str) -> str:
+        """Fetch the commit message for a given SHA."""
+        url = f"{_GITHUB_API}/repos/{repo}/commits/{sha}"
+        r = requests.get(url, headers=self._headers, timeout=30)
+        r.raise_for_status()
+        return r.json()["commit"]["message"]
+
     def get_pr_diff(self, repo: str, pr_number: int) -> str:
         """Fetch the unified diff for a pull request."""
         url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}"

@@ -94,6 +94,7 @@ def _handle_pull_request():
 
     repo      = payload["repository"]["full_name"]
     pr_number = payload["pull_request"]["number"]
+    head_sha  = payload["pull_request"]["head"]["sha"]
     logger.info("Reviewing %s#%d (action=%s)", repo, pr_number, action)
 
     env_error = _check_env()
@@ -101,6 +102,17 @@ def _handle_pull_request():
         return jsonify({"error": env_error}), 500
 
     client = GitHubClient(token=_GITHUB_TOKEN)
+
+    # Skip review if this synchronize was triggered by our own auto-fix commit.
+    # Without this, every fix commit would re-trigger a review of the already-fixed code.
+    if action == "synchronize":
+        try:
+            commit_msg = client.get_commit_message(repo, head_sha)
+            if commit_msg.startswith("auto-fix:"):
+                logger.info("Skipping review — triggered by auto-fix commit on %s#%d", repo, pr_number)
+                return jsonify({"ok": True, "message": "skipped — auto-fix commit"})
+        except Exception as exc:
+            logger.warning("Could not check commit message: %s — proceeding with review", exc)
 
     # Fetch PR diff (review agents only see what changed, not the whole repo)
     try:
@@ -248,7 +260,7 @@ def _handle_issue_comment():
                 and fix_result.fixed_code != file_data["content"]
             )
             if code_changed:
-                commit_msg = "fix: " + "; ".join(fix_result.changes[:3])
+                commit_msg = "auto-fix: " + "; ".join(fix_result.changes[:3])
                 if len(fix_result.changes) > 3:
                     commit_msg += f" (+{len(fix_result.changes) - 3} more)"
 
