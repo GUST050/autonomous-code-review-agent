@@ -37,7 +37,11 @@ class RagEnricher:
         most relevant KbEntry labels found for that agent's findings.
         Returns the same dict (mutated in-place) for graph reducer compatibility.
         """
-        store = self._store or RagStore.load()
+        try:
+            store = self._store or RagStore.load()
+        except Exception as exc:
+            logger.warning("[RAG] Knowledge base unavailable: %s — skipping enrichment", exc)
+            return results
 
         for agent_name, result in results.items():
             if not result or not result.findings:

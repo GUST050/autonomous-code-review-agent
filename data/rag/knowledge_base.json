@@ -1,0 +1,378 @@
+[
+  {
+    "id": "CWE-89",
+    "title": "SQL Injection",
+    "description": "SQL injection via string concatenation or f-string interpolation in database queries. User input embedded directly into SQL without parameterization allows UNION attacks, data exfiltration, authentication bypass, and arbitrary UPDATE or DELETE. Common patterns: execute('SELECT ... WHERE id=' + user_input), f-string SQL, %s-formatting outside parameterized call.",
+    "owasp": "A03:2021",
+    "cvss": 9.8,
+    "remediation": "Use parameterized queries: conn.execute('SELECT ... WHERE id=?', (user_input,))"
+  },
+  {
+    "id": "CWE-564",
+    "title": "SQL Injection via Hibernate",
+    "description": "ORM-level SQL injection when raw HQL or native SQL queries are constructed with user input instead of named parameters.",
+    "owasp": "A03:2021",
+    "cvss": 8.8,
+    "remediation": "Use named parameters in ORM queries"
+  },
+  {
+    "id": "CWE-78",
+    "title": "OS Command Injection",
+    "description": "User-controlled input passed to os.system(), subprocess.call(), subprocess.Popen() with shell=True, or os.popen() enables arbitrary shell command execution. An attacker can run rm -rf, exfiltrate data, or pivot to internal systems.",
+    "owasp": "A03:2021",
+    "cvss": 9.8,
+    "remediation": "Use subprocess with a list of arguments and shell=False; never pass user input to shell=True"
+  },
+  {
+    "id": "CWE-94",
+    "title": "Code Injection via eval or exec",
+    "description": "Calling eval() or exec() with user-controlled or external input allows arbitrary Python code execution. Template systems using eval for expression evaluation (e.g. {{ user_expr }}) are vulnerable to Server-Side Template Injection (SSTI) enabling RCE.",
+    "owasp": "A03:2021",
+    "cvss": 9.8,
+    "remediation": "Replace eval() with a safe expression evaluator; for templates use Jinja2 with SandboxedEnvironment"
+  },
+  {
+    "id": "CWE-502",
+    "title": "Deserialization of Untrusted Data (pickle)",
+    "description": "pickle.loads(), marshal.loads(), or yaml.load() called with untrusted or unverified input enables arbitrary code execution during deserialization. An attacker crafts a payload that executes os.system() or reverse shell on the server. No signature validation = full RCE.",
+    "owasp": "A08:2021",
+    "cvss": 9.8,
+    "remediation": "Use json.loads() for data interchange; if pickle is required, validate HMAC signature before deserializing"
+  },
+  {
+    "id": "CWE-22",
+    "title": "Path Traversal",
+    "description": "User input used in file paths without sanitization allows reading or writing files outside the intended directory. Patterns: open(user_input), os.path.join(base, user_input) without canonicalization, send_file(filename).",
+    "owasp": "A01:2021",
+    "cvss": 8.6,
+    "remediation": "Canonicalize paths with os.path.realpath() and verify the result starts with the allowed base directory"
+  },
+  {
+    "id": "CWE-79",
+    "title": "Cross-Site Scripting (XSS)",
+    "description": "User-supplied HTML or JavaScript inserted into responses without escaping allows attackers to execute scripts in victims' browsers, steal cookies, or perform actions on behalf of users.",
+    "owasp": "A03:2021",
+    "cvss": 7.5,
+    "remediation": "HTML-escape all user input in templates; use Content-Security-Policy headers"
+  },
+  {
+    "id": "CWE-601",
+    "title": "Open Redirect",
+    "description": "Redirect URL taken from user input without validation allows phishing attacks where the application redirects users to malicious sites.",
+    "owasp": "A01:2021",
+    "cvss": 6.1,
+    "remediation": "Validate redirect URLs against an allowlist of trusted domains"
+  },
+  {
+    "id": "CWE-798",
+    "title": "Hardcoded Credentials",
+    "description": "API keys, passwords, tokens, or secrets hardcoded in source code (e.g. STRIPE_SECRET = 'sk_live_...', JWT_SECRET = '...', ADMIN_TOKEN = '...'). Anyone with read access to the source or compiled artifact can extract and abuse the credentials.",
+    "owasp": "A07:2021",
+    "cvss": 9.1,
+    "remediation": "Move secrets to environment variables (os.environ.get) or a secrets manager like AWS Secrets Manager or HashiCorp Vault"
+  },
+  {
+    "id": "CWE-321",
+    "title": "Hardcoded Cryptographic Key",
+    "description": "JWT secrets, encryption keys, or HMAC keys hardcoded directly in code. If the key leaks the entire authentication or encryption system is compromised. Common: JWT_SECRET = 'mysecret', AES_KEY = b'hardcodedkey...'",
+    "owasp": "A02:2021",
+    "cvss": 8.8,
+    "remediation": "Load cryptographic keys from environment variables or a key management service; never commit keys to source control"
+  },
+  {
+    "id": "CWE-327",
+    "title": "Weak Cryptographic Algorithm (MD5/SHA1)",
+    "description": "MD5 or SHA-1 used for password hashing or data integrity. MD5 is broken for cryptographic use — it can be cracked in seconds with rainbow tables or GPU attacks. hashlib.md5(password.encode()).hexdigest() for passwords is critically insecure.",
+    "owasp": "A02:2021",
+    "cvss": 7.5,
+    "remediation": "Use bcrypt, argon2, or scrypt for passwords; use SHA-256 or SHA-3 for integrity checks"
+  },
+  {
+    "id": "CWE-916",
+    "title": "Insufficient Password Hashing",
+    "description": "Passwords stored with fast hashing algorithms (MD5, SHA-1, SHA-256 without salt/work factor) are vulnerable to offline brute-force attacks. Fast hashes allow billions of guesses per second on modern hardware.",
+    "owasp": "A02:2021",
+    "cvss": 7.5,
+    "remediation": "Use bcrypt (cost factor >= 12) or argon2id for all password storage"
+  },
+  {
+    "id": "CWE-330",
+    "title": "Insufficient Randomness",
+    "description": "Using random.random() or random.randint() for security-sensitive purposes (tokens, session IDs, CSRF tokens) instead of secrets.token_hex() or os.urandom(). The Mersenne Twister PRNG is predictable.",
+    "owasp": "A02:2021",
+    "cvss": 7.5,
+    "remediation": "Use secrets.token_hex(32) or os.urandom(32) for all security-sensitive random values"
+  },
+  {
+    "id": "CWE-311",
+    "title": "Missing Encryption of Sensitive Data",
+    "description": "Passwords, API keys, PII, or sensitive configuration stored or transmitted in plaintext without encryption.",
+    "owasp": "A02:2021",
+    "cvss": 7.5,
+    "remediation": "Encrypt sensitive data at rest and in transit using AES-256-GCM or TLS 1.2+"
+  },
+  {
+    "id": "CWE-287",
+    "title": "Improper Authentication",
+    "description": "Authentication checks that can be bypassed: reset_token accepted but never verified, password reset without validating the token exists in the database, authentication relying on client-supplied values without server-side verification.",
+    "owasp": "A07:2021",
+    "cvss": 9.1,
+    "remediation": "Always verify reset tokens against a server-side store with expiry; never trust client-supplied identity claims"
+  },
+  {
+    "id": "CWE-620",
+    "title": "Unverified Password Change",
+    "description": "Password reset or change endpoint that accepts a reset token parameter but does not validate it against a stored token. Allows any attacker to reset any user's password by supplying only the email address.",
+    "owasp": "A07:2021",
+    "cvss": 9.1,
+    "remediation": "Validate reset token exists in password_reset_tokens table, matches the email, and has not expired before updating the password"
+  },
+  {
+    "id": "CWE-284",
+    "title": "Improper Access Control / IDOR",
+    "description": "Insecure Direct Object Reference: endpoint accepts a user_id or resource_id parameter without verifying the authenticated user owns that resource. Allows enumeration of all users, orders, or records by iterating IDs.",
+    "owasp": "A01:2021",
+    "cvss": 8.1,
+    "remediation": "Always verify ownership: WHERE id=? AND user_id=current_user_id; never expose sequential IDs"
+  },
+  {
+    "id": "CWE-285",
+    "title": "Improper Authorization",
+    "description": "Role-based access checks missing or bypassable. Admin functions accessible without verifying the caller has admin role. Privilege escalation by modifying role parameter in request.",
+    "owasp": "A01:2021",
+    "cvss": 8.8,
+    "remediation": "Enforce role checks server-side on every request; never trust user-supplied role claims"
+  },
+  {
+    "id": "CWE-208",
+    "title": "Observable Timing Discrepancy (Timing Attack)",
+    "description": "Secret comparison using == or != operator leaks information through timing differences. Python string comparison is short-circuit: 'admin' == 'a...' exits early, measurable with microsecond-precision timing. Allows brute-force of tokens and passwords.",
+    "owasp": "A02:2021",
+    "cvss": 5.9,
+    "remediation": "Use hmac.compare_digest(a, b) for all security-sensitive comparisons"
+  },
+  {
+    "id": "CWE-307",
+    "title": "Improper Restriction of Authentication Attempts",
+    "description": "No rate limiting or account lockout on login, password reset, or token validation endpoints. Allows brute-force attacks against passwords and tokens.",
+    "owasp": "A07:2021",
+    "cvss": 7.5,
+    "remediation": "Implement rate limiting (e.g. Flask-Limiter, slowapi) and progressive lockout after failed attempts"
+  },
+  {
+    "id": "CWE-352",
+    "title": "Cross-Site Request Forgery (CSRF)",
+    "description": "State-changing requests (POST, PUT, DELETE) not protected by CSRF tokens allow attackers to forge requests on behalf of authenticated users by tricking them into visiting a malicious page.",
+    "owasp": "A01:2021",
+    "cvss": 8.8,
+    "remediation": "Use synchronizer token pattern or SameSite=Strict cookies; validate Origin and Referer headers"
+  },
+  {
+    "id": "CWE-319",
+    "title": "Cleartext Transmission of Sensitive Information",
+    "description": "Sensitive data (passwords, tokens, PII) sent over HTTP instead of HTTPS, or logged in plaintext to log files or error messages.",
+    "owasp": "A02:2021",
+    "cvss": 7.5,
+    "remediation": "Enforce HTTPS everywhere; never log sensitive values; use structured logging with field-level redaction"
+  },
+  {
+    "id": "CWE-400",
+    "title": "Uncontrolled Resource Consumption (ReDoS)",
+    "description": "Regular expressions with exponential backtracking applied to user-controlled input. Crafted input can cause regex evaluation to take seconds or minutes, enabling Denial of Service.",
+    "owasp": "A05:2021",
+    "cvss": 7.5,
+    "remediation": "Use non-backtracking regex engines or validate input length before regex application"
+  },
+  {
+    "id": "CWE-770",
+    "title": "Allocation of Resources Without Limits",
+    "description": "Loading entire database tables or large files into memory without pagination or streaming. Can cause Out-Of-Memory errors under load or with adversarial inputs.",
+    "owasp": "A05:2021",
+    "cvss": 5.3,
+    "remediation": "Use pagination (LIMIT/OFFSET or cursor-based), streaming, or lazy evaluation for large datasets"
+  },
+  {
+    "id": "PERF-N1",
+    "title": "N+1 Query Problem",
+    "description": "Database query inside a loop: one query per item instead of a single batched query. For N items this creates N+1 database round-trips. At scale (1000+ items) this causes severe latency and database overload. Common pattern: for uid in user_ids: conn.execute('SELECT ... WHERE id=?', (uid,))",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Replace per-item queries with a single IN-clause: SELECT ... WHERE id IN (?,?,?) and build a dict for O(1) lookups"
+  },
+  {
+    "id": "PERF-ON2",
+    "title": "O(n²) Nested Loop Algorithm",
+    "description": "Nested loops iterating the same collection: for each element, iterating all elements again to find matches. Quadratic time complexity makes the function unusable at scale — 10000 items = 100M iterations.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Replace nested loops with a dict-based O(n) pass: group by key in one scan, then filter"
+  },
+  {
+    "id": "PERF-STR",
+    "title": "String Concatenation in Loop",
+    "description": "Building strings with += or + inside a loop creates O(n²) memory allocations because Python strings are immutable and each concatenation copies the entire string. For large inputs this causes severe performance degradation.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Collect parts in a list and join at the end: ''.join(parts) or ', '.join(items)"
+  },
+  {
+    "id": "PERF-SEEN-LIST",
+    "title": "Linear Lookup in seen List",
+    "description": "Using a list for deduplication or membership checking (if x in seen_list) causes O(n) per lookup, making the overall algorithm O(n²). Common in deduplication loops.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Replace the seen list with a set for O(1) membership checks"
+  },
+  {
+    "id": "CWE-703",
+    "title": "Improper Check or Handling of Exceptional Conditions",
+    "description": "Bare except clauses, swallowing exceptions silently, or returning None/False on error instead of raising. Hides bugs, makes debugging impossible, and can allow partial state to persist.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Catch specific exception types; log and re-raise or return meaningful error responses"
+  },
+  {
+    "id": "CWE-772",
+    "title": "Missing Release of Resource After Effective Lifetime",
+    "description": "Database connections, file handles, or network sockets opened but never closed. In long-running processes this causes connection pool exhaustion and resource leaks.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Use context managers (with sqlite3.connect(...) as conn) or explicit finally blocks to guarantee resource release"
+  },
+  {
+    "id": "CWE-710",
+    "title": "Improper Adherence to Coding Standards",
+    "description": "Non-descriptive function or variable names (p, d, calc, r, n, t) that make code impossible to understand without execution context. Violates PEP8 and makes maintenance expensive.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Use descriptive names that reflect purpose: get_nested_value instead of p, compute_order_stats instead of calc"
+  },
+  {
+    "id": "CWE-1041",
+    "title": "Use of Redundant Code",
+    "description": "Duplicated logic (copy-paste code), duplicate database connection opening, or repeated computation that could be extracted into a helper function. Increases maintenance burden and risk of inconsistency.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Extract duplicated logic into a shared helper function; open shared resources once per call"
+  },
+  {
+    "id": "CWE-1164",
+    "title": "Irrelevant Code",
+    "description": "Dead code, commented-out blocks, unreachable branches, or unused imports that add noise and confusion without serving any purpose.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Remove dead code; use version control history to recover if needed"
+  },
+  {
+    "id": "CWE-1059",
+    "title": "Insufficient Technical Documentation",
+    "description": "Missing or inadequate docstrings on non-trivial public functions. Callers cannot understand parameters, return values, side effects, or error conditions without reading the implementation.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Add concise docstrings describing purpose, parameters, return value, and any side effects"
+  },
+  {
+    "id": "CWE-573",
+    "title": "Improper Following of Specification by Caller",
+    "description": "Missing type hints on public functions makes static analysis impossible and forces callers to inspect implementation. Particularly harmful in larger codebases.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Add type annotations to all public function parameters and return types"
+  },
+  {
+    "id": "CWE-1120",
+    "title": "Excessive Code Complexity",
+    "description": "Functions with deep nesting (4+ levels), multiple unrelated responsibilities, or cyclomatic complexity above 10. Hard to test, maintain, and reason about.",
+    "owasp": null,
+    "cvss": null,
+    "remediation": "Apply Single Responsibility Principle; extract nested conditions into guard clauses; split large functions"
+  },
+  {
+    "id": "CWE-259",
+    "title": "Hard-coded Password",
+    "description": "Passwords, PINs, or passphrases written directly into source code. Common patterns: password = 'admin123', DB_PASSWORD = 'secret', API_KEY = 'sk_live_...'",
+    "owasp": "A07:2021",
+    "cvss": 9.8,
+    "remediation": "Read passwords from environment variables or a secrets vault at runtime"
+  },
+  {
+    "id": "CWE-312",
+    "title": "Cleartext Storage of Sensitive Information",
+    "description": "Passwords, tokens, or PII stored in database columns, log files, or configuration files without encryption or hashing.",
+    "owasp": "A02:2021",
+    "cvss": 7.5,
+    "remediation": "Hash passwords with bcrypt/argon2; encrypt PII at rest; exclude secrets from logs"
+  },
+  {
+    "id": "CWE-918",
+    "title": "Server-Side Request Forgery (SSRF)",
+    "description": "User-controlled URL passed to requests.get(), urllib, or httpx without validation allows attackers to make the server fetch internal resources (AWS metadata endpoint, internal APIs, localhost services).",
+    "owasp": "A10:2021",
+    "cvss": 8.6,
+    "remediation": "Validate URLs against an allowlist; block private IP ranges (10.x, 172.16.x, 192.168.x, 169.254.x)"
+  },
+  {
+    "id": "CWE-209",
+    "title": "Generation of Error Message Containing Sensitive Information",
+    "description": "Stack traces, SQL errors, or internal paths exposed in HTTP responses or logs reveal implementation details useful to attackers.",
+    "owasp": "A05:2021",
+    "cvss": 5.3,
+    "remediation": "Return generic error messages to clients; log detailed errors server-side only with appropriate access controls"
+  },
+  {
+    "id": "CWE-732",
+    "title": "Incorrect Permission Assignment for Critical Resource",
+    "description": "Files, directories, or database records created with overly permissive access rights allow unauthorized read or write access.",
+    "owasp": "A01:2021",
+    "cvss": 7.8,
+    "remediation": "Apply principle of least privilege; use chmod 600 for sensitive files; restrict database grants"
+  },
+  {
+    "id": "CWE-862",
+    "title": "Missing Authorization",
+    "description": "Sensitive operations (admin actions, data modification, role changes) performed without verifying the caller has the necessary role or permission. Function accepts an admin_token but compares it with == instead of constant-time comparison, or skips verification entirely.",
+    "owasp": "A01:2021",
+    "cvss": 8.8,
+    "remediation": "Enforce authorization on every sensitive operation; use hmac.compare_digest for token comparison"
+  },
+  {
+    "id": "CWE-345",
+    "title": "Insufficient Verification of Data Authenticity",
+    "description": "Webhook payloads, API responses, or serialized data accepted and processed without verifying a cryptographic signature. Allows injection of forged payloads.",
+    "owasp": "A08:2021",
+    "cvss": 8.1,
+    "remediation": "Verify HMAC-SHA256 signature before processing any incoming payload; reject unsigned data"
+  },
+  {
+    "id": "CWE-190",
+    "title": "Integer Overflow or Wraparound",
+    "description": "Arithmetic on untrusted integer inputs without bounds checking can overflow, producing unexpected negative or zero values used in security decisions or memory allocation.",
+    "owasp": "A03:2021",
+    "cvss": 7.5,
+    "remediation": "Validate integer inputs are within expected bounds before arithmetic operations"
+  },
+  {
+    "id": "OWASP-A09",
+    "title": "Security Logging and Monitoring Failures",
+    "description": "Authentication failures, privilege escalations, and suspicious inputs not logged. Without audit trails, breaches go undetected and post-incident investigation is impossible.",
+    "owasp": "A09:2021",
+    "cvss": null,
+    "remediation": "Log security events (auth failures, role changes, admin actions) with timestamp, user, and IP; set up alerting on anomalies"
+  },
+  {
+    "id": "CWE-676",
+    "title": "Use of Potentially Dangerous Function",
+    "description": "Functions inherently dangerous when used with untrusted input: eval(), exec(), pickle.loads(), yaml.load(), subprocess with shell=True, os.system(). These functions can execute arbitrary code.",
+    "owasp": "A03:2021",
+    "cvss": 9.8,
+    "remediation": "Replace with safe alternatives: ast.literal_eval() for simple expressions, json.loads() for data, subprocess list form for commands"
+  },
+  {
+    "id": "CWE-326",
+    "title": "Inadequate Encryption Strength",
+    "description": "Weak cipher choices: DES, 3DES, RC4, RSA-1024, AES-ECB mode. ECB mode in particular is deterministic and leaks patterns in encrypted data.",
+    "owasp": "A02:2021",
+    "cvss": 7.5,
+    "remediation": "Use AES-256-GCM for symmetric encryption; RSA-2048+ or ECDSA P-256 for asymmetric; never use ECB mode"
+  }
+]

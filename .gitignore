@@ -101,6 +101,7 @@ temp/
 # Project specific (AI / LangGraph)
 # ========================================
 data/
+!data/rag/knowledge_base.json
 outputs/
 reports/
 checkpoints/
