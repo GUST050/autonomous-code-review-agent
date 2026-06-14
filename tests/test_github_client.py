@@ -6,7 +6,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from schemas.response import AgentResponse
-from utils.github_client import GitHubClient, format_github_comment, _severity_emoji
+from schemas.fix_response import FixResponse
+from utils.github_client import (
+    GitHubClient,
+    format_pr_review,
+    _severity_emoji,
+    _review_event,
+)
 
 
 class TestSeverityEmoji:
@@ -26,7 +32,18 @@ class TestSeverityEmoji:
         assert _severity_emoji(0) == "✅"
 
 
-class TestFormatGithubComment:
+class TestReviewEvent:
+    def test_critical_requests_changes(self):
+        assert _review_event(90) == "REQUEST_CHANGES"
+
+    def test_low_severity_is_comment(self):
+        assert _review_event(30) == "COMMENT"
+
+    def test_clean_approves(self):
+        assert _review_event(0) == "APPROVE"
+
+
+class TestFormatPrReview:
     def _result(self, severity, findings, refs=None):
         return AgentResponse(
             reasoning="test",
@@ -35,45 +52,56 @@ class TestFormatGithubComment:
             references=refs or [],
         )
 
-    def test_clean_result_shows_no_issues(self):
-        comment = format_github_comment({"Injection Expert": self._result(0, [])})
+    def test_clean_shows_no_issues(self):
+        comment = format_pr_review({"Injection Expert": self._result(0, [])})
         assert "No issues found" in comment
 
-    def test_finding_appears_in_comment(self):
-        comment = format_github_comment({
+    def test_finding_appears_in_review(self):
+        comment = format_pr_review({
             "Injection Expert": self._result(95, ["login(): SQL injection"])
         })
         assert "login(): SQL injection" in comment
 
     def test_agent_summary_table_present(self):
-        comment = format_github_comment({"Injection Expert": self._result(95, ["x"])})
+        comment = format_pr_review({"Injection Expert": self._result(95, ["x"])})
         assert "Agent Summary" in comment
         assert "Injection Expert" in comment
 
     def test_references_shown(self):
-        comment = format_github_comment({
+        comment = format_pr_review({
             "Injection Expert": self._result(95, ["x"], refs=["CWE-89"])
         })
         assert "CWE-89" in comment
 
     def test_none_result_shows_unavailable(self):
-        comment = format_github_comment({"Injection Expert": None})
+        comment = format_pr_review({"Injection Expert": None})
         assert "Unavailable" in comment
 
-    def test_multiple_agents_all_in_summary(self):
-        results = {
-            "Injection Expert": self._result(90, ["sql injection"]),
-            "Auth Expert": self._result(0, []),
-        }
-        comment = format_github_comment(results)
-        assert "Injection Expert" in comment
-        assert "Auth Expert" in comment
-
     def test_critical_emoji_for_high_severity(self):
-        comment = format_github_comment({
-            "Injection Expert": self._result(95, ["x"])
-        })
+        comment = format_pr_review({"Injection Expert": self._result(95, ["x"])})
         assert "🔴" in comment
+
+    def test_fix_changes_shown_when_provided(self):
+        fix = FixResponse(fixed_code="x = 1\n", changes=["Replaced MD5 with SHA-256"])
+        comment = format_pr_review({"Injection Expert": self._result(95, ["x"])}, fix)
+        assert "Replaced MD5 with SHA-256" in comment
+
+    def test_fix_section_absent_when_no_fix(self):
+        comment = format_pr_review({"Injection Expert": self._result(95, ["x"])})
+        assert "Suggested Fixes" not in comment
+
+    def test_unfixable_shown(self):
+        fix = FixResponse(
+            fixed_code="",
+            changes=[],
+            unfixable=["Rate limiting requires middleware"],
+        )
+        comment = format_pr_review({"Auth Expert": self._result(70, ["x"])}, fix)
+        assert "Rate limiting requires middleware" in comment
+
+    def test_approve_header_when_clean(self):
+        comment = format_pr_review({"Injection Expert": self._result(0, [])})
+        assert "good to merge" in comment
 
 
 class TestGitHubClient:
@@ -94,7 +122,20 @@ class TestGitHubClient:
         assert "owner/repo" in called_url
         assert "42" in called_url
 
-    def test_post_pr_comment_calls_correct_url(self):
+    def test_post_pr_review_calls_reviews_endpoint(self):
+        client = self._client()
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("utils.github_client.requests.post", return_value=mock_response) as mock_post:
+            client.post_pr_review("owner/repo", 42, "body", "REQUEST_CHANGES")
+
+        called_url = mock_post.call_args[0][0]
+        assert "pulls/42/reviews" in called_url
+        assert mock_post.call_args[1]["json"]["event"] == "REQUEST_CHANGES"
+        assert mock_post.call_args[1]["json"]["body"] == "body"
+
+    def test_post_pr_comment_calls_issues_endpoint(self):
         client = self._client()
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
@@ -103,9 +144,7 @@ class TestGitHubClient:
             client.post_pr_comment("owner/repo", 42, "review body")
 
         called_url = mock_post.call_args[0][0]
-        assert "owner/repo" in called_url
-        assert "42" in called_url
-        assert mock_post.call_args[1]["json"]["body"] == "review body"
+        assert "issues/42/comments" in called_url
 
     def test_get_pr_diff_raises_on_http_error(self):
         client = self._client()

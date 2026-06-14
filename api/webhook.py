@@ -3,8 +3,10 @@ webhook.py — Vercel serverless function that receives GitHub webhooks and
 runs the code review pipeline on every pull request.
 
 Environment variables (set in Vercel dashboard):
-  GITHUB_TOKEN          Personal Access Token with repo + PR comment permissions
+  GITHUB_TOKEN          Personal Access Token with repo + PR review permissions
   ANTHROPIC_API_KEY     Your Anthropic API key
+  OPENAI_API_KEY        Your OpenAI API key
+  XAI_API_KEY           Your xAI API key
   GITHUB_WEBHOOK_SECRET Secret you chose when setting up the webhook on GitHub
 """
 import hashlib
@@ -13,13 +15,12 @@ import logging
 import os
 import sys
 
-# Make src/ importable on Vercel (PYTHONPATH=src is set in vercel.json)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
 from review import run_review
-from utils.github_client import GitHubClient, format_github_comment
+from utils.github_client import GitHubClient, format_pr_review, _review_event
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,9 +32,8 @@ _GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")
 
 
 def _valid_signature(payload: bytes, signature: str) -> bool:
-    """Return True if the HMAC-SHA256 signature matches the webhook secret."""
     if not _WEBHOOK_SECRET:
-        logger.warning("GITHUB_WEBHOOK_SECRET is not set — skipping signature check")
+        logger.warning("GITHUB_WEBHOOK_SECRET not set — skipping signature check")
         return True
     expected = "sha256=" + hmac.new(
         _WEBHOOK_SECRET.encode(), payload, hashlib.sha256
@@ -51,11 +51,9 @@ def webhook():
 
     event = request.headers.get("X-GitHub-Event", "")
 
-    # ── 2. Acknowledge ping (GitHub sends this on webhook creation) ───────
     if event == "ping":
         return jsonify({"ok": True, "message": "pong"})
 
-    # ── 3. Only handle pull_request events ───────────────────────────────
     if event != "pull_request":
         return jsonify({"ok": True, "message": "ignored"})
 
@@ -69,16 +67,15 @@ def webhook():
     pr_number = payload["pull_request"]["number"]
     logger.info("Reviewing %s#%d (action=%s)", repo, pr_number, action)
 
-    # ── 4. Check required env vars ────────────────────────────────────────
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    # ── 2. Check required env vars ────────────────────────────────────────
     if not _GITHUB_TOKEN:
         return jsonify({"error": "GITHUB_TOKEN not configured"}), 500
-    if not anthropic_key:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
         return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 500
 
     client = GitHubClient(token=_GITHUB_TOKEN)
 
-    # ── 5. Fetch PR diff ─────────────────────────────────────────────────
+    # ── 3. Fetch PR diff ─────────────────────────────────────────────────
     try:
         diff = client.get_pr_diff(repo, pr_number)
     except Exception as exc:
@@ -88,26 +85,32 @@ def webhook():
     if not diff.strip():
         return jsonify({"ok": True, "message": "empty diff — nothing to review"})
 
-    # ── 6. Run review agents ─────────────────────────────────────────────
+    # ── 4. Run review agents + fix generator ─────────────────────────────
     try:
-        final_state = run_review(diff)
+        final_state = run_review(diff, fix=True)
     except Exception as exc:
         logger.error("Review failed for %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
-    # ── 7. Post results as PR comment ────────────────────────────────────
-    results = final_state.get("results", {})
-    comment = format_github_comment(results)
+    results    = final_state.get("results", {})
+    fix_result = final_state.get("fix_result")
+
+    # ── 5. Post formal PR review ─────────────────────────────────────────
+    max_severity = max((r.severity for r in results.values() if r), default=0)
+    review_body  = format_pr_review(results, fix_result)
+    review_event = _review_event(max_severity)
 
     try:
-        client.post_pr_comment(repo, pr_number, comment)
+        client.post_pr_review(repo, pr_number, review_body, review_event)
     except Exception as exc:
-        logger.error("Could not post comment on %s#%d: %s", repo, pr_number, exc)
+        logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
-    logger.info("Review complete for %s#%d", repo, pr_number)
-    return jsonify({"ok": True})
+    logger.info(
+        "Review complete for %s#%d — severity %d, event %s",
+        repo, pr_number, max_severity, review_event,
+    )
+    return jsonify({"ok": True, "severity": max_severity, "event": review_event})
 
 
-# Vercel looks for a callable named `handler`
 handler = app

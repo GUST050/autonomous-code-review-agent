@@ -1,64 +1,126 @@
 """
-github_client.py — GitHub REST API for fetching PR diffs and posting review comments.
+github_client.py — GitHub REST API for fetching PR diffs and posting PR reviews.
 """
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import requests
 
 from config import APPROVAL_THRESHOLD
 from schemas.response import AgentResponse
+from schemas.fix_response import FixResponse
 
 logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 
-_SEVERITY_EMOJI = {
-    "critical": "🔴",
-    "high":     "🟠",
-    "medium":   "🟡",
-    "low":      "🟢",
-    "clean":    "✅",
-}
-
 
 def _severity_emoji(severity: int) -> str:
     if severity >= APPROVAL_THRESHOLD:
-        return _SEVERITY_EMOJI["critical"]
+        return "🔴"
     if severity >= 60:
-        return _SEVERITY_EMOJI["high"]
+        return "🟠"
     if severity >= 30:
-        return _SEVERITY_EMOJI["medium"]
+        return "🟡"
     if severity > 0:
-        return _SEVERITY_EMOJI["low"]
-    return _SEVERITY_EMOJI["clean"]
+        return "🟢"
+    return "✅"
 
 
-def format_github_comment(results: Dict[str, Optional[AgentResponse]]) -> str:
+def _review_event(max_severity: int) -> str:
+    """Decide GitHub review event based on worst severity found."""
+    if max_severity >= APPROVAL_THRESHOLD:
+        return "REQUEST_CHANGES"
+    if max_severity > 0:
+        return "COMMENT"
+    return "APPROVE"
+
+
+def _review_header(max_severity: int, issue_count: int) -> str:
+    if max_severity == 0:
+        return "✅ **No issues found** — this PR looks good to merge."
+    emoji = _severity_emoji(max_severity)
+    label = "critical issue" if max_severity >= APPROVAL_THRESHOLD else "issue"
+    plural = "s" if issue_count != 1 else ""
+    return f"{emoji} **{issue_count} {label}{plural} found** — severity {max_severity}/100"
+
+
+def format_pr_review(
+    results: Dict[str, Optional[AgentResponse]],
+    fix_result: Optional[FixResponse] = None,
+) -> str:
     """
-    Convert agent results into a GitHub-flavoured markdown PR comment.
+    Build a professional GitHub PR review body in markdown.
+    Includes findings per agent, fix suggestions, and a summary table.
     """
-    lines = ["## 🔍 Autonomous Code Review\n"]
+    max_severity = max(
+        (r.severity for r in results.values() if r), default=0
+    )
+    all_findings = [
+        (agent, r)
+        for agent, r in results.items()
+        if r and r.severity > 0 and r.findings
+    ]
+    issue_count = sum(len(r.findings) for _, r in all_findings)
 
-    findings_found = False
-    for agent_name, result in results.items():
-        if not result or result.severity == 0 or not result.findings:
-            continue
-        findings_found = True
+    lines: List[str] = [
+        "## 🔍 Autonomous Code Review",
+        "",
+        _review_header(max_severity, issue_count),
+        "",
+    ]
+
+    # ── Per-agent findings ────────────────────────────────────────────────
+    for agent_name, result in all_findings:
         emoji = _severity_emoji(result.severity)
-        lines.append(f"### {emoji} {agent_name} — {result.severity}/100\n")
+        lines += [
+            "---",
+            f"### {emoji} {agent_name} — {result.severity}/100",
+            "",
+        ]
         for finding in result.findings:
             lines.append(f"- {finding}")
-        refs = result.references or []
-        if refs:
-            lines.append("\n**References:** " + " · ".join(refs))
+
+        if result.references:
+            lines.append("")
+            lines.append("**References:** " + " · ".join(result.references))
+
         lines.append("")
 
-    if not findings_found:
-        lines.append("✅ **No issues found** — all agents reported clean.\n")
+    # ── Fix suggestions ───────────────────────────────────────────────────
+    if fix_result and (fix_result.changes or fix_result.unfixable):
+        lines += ["---", "### 🔧 Suggested Fixes", ""]
+        for i, change in enumerate(fix_result.changes, 1):
+            lines.append(f"**{i}.** {change}")
+        lines.append("")
 
-    # Agent summary table
-    lines += ["---", "### Agent Summary\n", "| Agent | Severity | Status |", "|-------|----------|--------|"]
+        if fix_result.fixed_code:
+            lines += [
+                "<details>",
+                "<summary>View complete fixed file</summary>",
+                "",
+                "```python",
+                fix_result.fixed_code.strip(),
+                "```",
+                "",
+                "</details>",
+                "",
+            ]
+
+        if fix_result.unfixable:
+            lines += ["**Requires manual intervention:**", ""]
+            for item in fix_result.unfixable:
+                lines.append(f"- ⚠️ {item}")
+            lines.append("")
+
+    # ── Agent summary table ───────────────────────────────────────────────
+    lines += [
+        "---",
+        "### Agent Summary",
+        "",
+        "| Agent | Severity | Status |",
+        "|-------|----------|--------|",
+    ]
     for agent_name, result in results.items():
         if result is None:
             lines.append(f"| {agent_name} | — | ⚠️ Unavailable |")
@@ -67,7 +129,10 @@ def format_github_comment(results: Dict[str, Optional[AgentResponse]]) -> str:
             label = "Clean" if result.severity == 0 else f"{result.severity}/100"
             lines.append(f"| {agent_name} | {label} | {emoji} |")
 
-    lines.append("\n*Powered by [Code Review Agent](https://github.com)*")
+    lines += [
+        "",
+        "*Powered by [Autonomous Code Review Agent](https://github.com/GUST050/autonomous-code-review-agent)*",
+    ]
     return "\n".join(lines)
 
 
@@ -92,8 +157,29 @@ class GitHubClient:
         response.raise_for_status()
         return response.text
 
+    def post_pr_review(
+        self,
+        repo: str,
+        pr_number: int,
+        body: str,
+        event: str,
+    ) -> None:
+        """
+        Post a formal PR review (shows as Approved / Changes requested / Comment).
+        event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+        """
+        url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}/reviews"
+        response = requests.post(
+            url,
+            headers=self._headers,
+            json={"body": body, "event": event},
+            timeout=30,
+        )
+        response.raise_for_status()
+        logger.info("Posted %s review on %s#%d", event, repo, pr_number)
+
     def post_pr_comment(self, repo: str, pr_number: int, body: str) -> None:
-        """Post a comment on the PR's conversation thread."""
+        """Post a plain comment on the PR conversation thread."""
         url = f"{_GITHUB_API}/repos/{repo}/issues/{pr_number}/comments"
         response = requests.post(
             url,
@@ -102,4 +188,4 @@ class GitHubClient:
             timeout=30,
         )
         response.raise_for_status()
-        logger.info("Posted review comment on %s#%d", repo, pr_number)
+        logger.info("Posted comment on %s#%d", repo, pr_number)
