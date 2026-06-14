@@ -90,14 +90,14 @@ def d(x, y, z):
         return None
 
 
-def proc(lst):
-    # Quality: ingen typning, oklar logik, inga kommentarer
-    r = []
-    for i in range(len(lst)):
-        if lst[i] % 2 == 0:
-            r.append(lst[i] * 2)
-        else:
-            r.append(lst[i])
-    return r
-
-# test
+def proc(lst: list[int]) -> list[int]:
+    """
+    Transform a list of integers by doubling even numbers and keeping odd numbers unchanged.
+    
+    Args:
+        lst: A list of integers to process.
+    
+    Returns:
+        A new list where even numbers are doubled and odd numbers remain unchanged.
+    """
+    return [x * 2 if x % 2 == 0 else x for x in lst]
