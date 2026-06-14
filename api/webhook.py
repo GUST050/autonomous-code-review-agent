@@ -87,7 +87,7 @@ def webhook():
 
     # ── 4. Run review agents + fix generator ─────────────────────────────
     try:
-        final_state = run_review(diff, fix=True)
+        final_state = run_review(diff, fix=False)
     except Exception as exc:
         logger.error("Review failed for %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
