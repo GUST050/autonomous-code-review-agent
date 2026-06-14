@@ -243,7 +243,11 @@ def _handle_issue_comment():
             file_data  = client.get_file_content(repo, path, branch)
             fix_result = run_fix(file_data["content"], findings_data)
 
-            if fix_result.changes and fix_result.fixed_code:
+            code_changed = (
+                fix_result.fixed_code
+                and fix_result.fixed_code != file_data["content"]
+            )
+            if code_changed:
                 commit_msg = "fix: " + "; ".join(fix_result.changes[:3])
                 if len(fix_result.changes) > 3:
                     commit_msg += f" (+{len(fix_result.changes) - 3} more)"
@@ -262,7 +266,7 @@ def _handle_issue_comment():
                     len(fix_result.changes), path, branch,
                 )
             else:
-                logger.info("No fixable changes found in %s", path)
+                logger.info("No code change in %s — skipping commit", path)
 
             all_unfixable.extend(fix_result.unfixable or [])
 
