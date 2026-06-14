@@ -5,7 +5,7 @@ Used by the webhook handler and any other non-CLI caller.
 The CLI (main.py) handles argument parsing and user prompts separately.
 """
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
@@ -75,3 +75,37 @@ def run_review(code: str, fix: bool = False) -> dict:
 
     graph = create_review_graph(review_agents, fix_agent)
     return ReviewRunner(graph).run(code, fix=fix)
+
+
+def run_fix(code: str, findings_data: Dict[str, dict]) -> "FixResponse":
+    """
+    Run only the fix agent using pre-computed review findings.
+
+    Used by the human-in-the-loop 'fix' command so we don't re-run all
+    five review agents — the findings were captured during the initial
+    review and stored in the PR review body as a hidden HTML comment.
+
+    findings_data: the dict returned by extract_findings_from_review(),
+    keyed by agent name, each value a dict with 'findings', 'severity',
+    'confidence', 'locations', 'reasoning'.
+    """
+    from schemas.fix_response import FixResponse
+    from schemas.response import AgentResponse
+
+    # Reconstruct proper AgentResponse objects from the serialized data.
+    agent_results: Dict[str, Optional[AgentResponse]] = {}
+    for agent_name, data in findings_data.items():
+        agent_results[agent_name] = AgentResponse(
+            reasoning=data.get("reasoning", "Restored from previous review"),
+            findings=data.get("findings", []),
+            severity=data.get("severity", 0),
+            confidence=data.get("confidence", 0),
+            locations=data.get("locations", []),
+        )
+
+    cfg = AGENT_CONFIGS
+    fix_agent = FixGeneratorAgent(
+        llm=_build_llm(cfg["Fix Generator"]),
+        fast_llm=_build_llm(FIX_GENERATOR_FAST),
+    )
+    return fix_agent.generate_fixes(code, agent_results)

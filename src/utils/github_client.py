@@ -1,7 +1,10 @@
 """
 github_client.py — GitHub REST API for fetching PR diffs and posting PR reviews.
 """
+import base64
+import json
 import logging
+import re
 from typing import Dict, List, Optional
 
 import requests
@@ -14,6 +17,60 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 
+# Delimiters for the hidden HTML comment that carries serialized findings.
+# Using base64 avoids any issues with special characters inside findings text.
+_FINDINGS_MARKER = "<!-- agent-findings-v1:"
+_FINDINGS_CLOSE  = " -->"
+
+
+# ── Findings serialization helpers ────────────────────────────────────────────
+
+def _embed_findings(results: Dict[str, Optional[AgentResponse]]) -> str:
+    """
+    Serialize agent results to a hidden HTML comment.
+
+    Embedded at the end of every PR review body so the human-in-the-loop
+    'fix' command can retrieve previous findings without a database.
+    """
+    data = {}
+    for agent, r in results.items():
+        if r:
+            data[agent] = {
+                "findings":   r.findings,
+                "severity":   r.severity,
+                "confidence": r.confidence,
+                "locations":  r.locations,
+                "reasoning":  r.reasoning,
+            }
+    encoded = base64.b64encode(json.dumps(data).encode()).decode()
+    return f"{_FINDINGS_MARKER}{encoded}{_FINDINGS_CLOSE}"
+
+
+def extract_findings_from_review(body: str) -> Dict[str, dict]:
+    """
+    Extract and deserialize agent findings from a PR review body.
+
+    Searches for the hidden HTML comment added by _embed_findings() and
+    returns the decoded data dict. Returns {} if no findings are embedded
+    or if decoding fails for any reason.
+    """
+    if not body:
+        return {}
+    pattern = (
+        re.escape(_FINDINGS_MARKER)
+        + r"([A-Za-z0-9+/=]+)"
+        + re.escape(_FINDINGS_CLOSE)
+    )
+    match = re.search(pattern, body)
+    if not match:
+        return {}
+    try:
+        return json.loads(base64.b64decode(match.group(1)).decode())
+    except Exception:
+        return {}
+
+
+# ── PR review body formatter ──────────────────────────────────────────────────
 
 def _severity_emoji(severity: int) -> str:
     if severity >= APPROVAL_THRESHOLD:
@@ -51,7 +108,9 @@ def format_pr_review(
 ) -> str:
     """
     Build a professional GitHub PR review body in markdown.
-    Includes findings per agent, fix suggestions, and a summary table.
+
+    Embeds a hidden HTML comment with serialized findings so the 'fix' command
+    can retrieve them later without a database.
     """
     max_severity = max(
         (r.severity for r in results.values() if r), default=0
@@ -129,12 +188,23 @@ def format_pr_review(
             label = "Clean" if result.severity == 0 else f"{result.severity}/100"
             lines.append(f"| {agent_name} | {label} | {emoji} |")
 
+    # ── Hint for fix command + hidden findings payload ────────────────────
+    if max_severity > 0:
+        lines += [
+            "",
+            "> 💬 Comment **`fix`** on this PR to let the agent commit fixes directly to the branch.",
+        ]
+
     lines += [
         "",
         "*Powered by [Autonomous Code Review Agent](https://github.com/GUST050/autonomous-code-review-agent)*",
+        "",
+        _embed_findings(results),
     ]
     return "\n".join(lines)
 
+
+# ── GitHub REST client ────────────────────────────────────────────────────────
 
 class GitHubClient:
     """Thin wrapper around the GitHub REST API."""
@@ -146,6 +216,8 @@ class GitHubClient:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+    # ── PR metadata ───────────────────────────────────────────────────────
+
     def get_pr_diff(self, repo: str, pr_number: int) -> str:
         """Fetch the unified diff for a pull request."""
         url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}"
@@ -156,6 +228,82 @@ class GitHubClient:
         )
         response.raise_for_status()
         return response.text
+
+    def get_pr_info(self, repo: str, pr_number: int) -> dict:
+        """Fetch PR metadata: head branch name, base branch, author, etc."""
+        url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}"
+        r = requests.get(url, headers=self._headers, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def get_pr_files(self, repo: str, pr_number: int) -> list:
+        """
+        Get the list of files changed in a PR.
+        Each entry contains 'filename', 'status' (added/modified/removed), etc.
+        """
+        url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}/files"
+        r = requests.get(url, headers=self._headers, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def get_pr_reviews(self, repo: str, pr_number: int) -> list:
+        """
+        Get all formal reviews on a PR, newest first.
+        Used by the 'fix' command to retrieve embedded findings.
+        """
+        url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}/reviews"
+        r = requests.get(url, headers=self._headers, timeout=30)
+        r.raise_for_status()
+        return list(reversed(r.json()))
+
+    # ── File content ──────────────────────────────────────────────────────
+
+    def get_file_content(self, repo: str, path: str, ref: str) -> dict:
+        """
+        Fetch a file's decoded text content and blob SHA from a specific branch/ref.
+
+        Returns {"content": str, "sha": str}.
+        The SHA is required when updating the file via commit_file().
+        """
+        url = f"{_GITHUB_API}/repos/{repo}/contents/{path}"
+        r = requests.get(url, headers=self._headers, params={"ref": ref}, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        content = base64.b64decode(data["content"]).decode("utf-8")
+        return {"content": content, "sha": data["sha"]}
+
+    def commit_file(
+        self,
+        repo: str,
+        path: str,
+        content: str,
+        sha: str,
+        branch: str,
+        message: str,
+    ) -> None:
+        """
+        Update a file on a branch via the Contents API.
+
+        sha must be the current blob SHA of the file (from get_file_content).
+        Raises requests.HTTPError on failure (e.g. 409 conflict).
+        """
+        url = f"{_GITHUB_API}/repos/{repo}/contents/{path}"
+        encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+        r = requests.put(
+            url,
+            headers=self._headers,
+            json={
+                "message": message,
+                "content": encoded,
+                "sha":     sha,
+                "branch":  branch,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        logger.info("Committed %s to %s on branch %s", path, repo, branch)
+
+    # ── Review and comment posting ────────────────────────────────────────
 
     def post_pr_review(
         self,
