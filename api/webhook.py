@@ -156,12 +156,13 @@ def _handle_pull_request():
 
 def _handle_issue_comment():
     """
-    When a PR comment body is exactly 'fix':
-      1. Read the previous review body to recover serialized agent findings.
-      2. Fetch each changed Python file from the PR branch.
-      3. Run the fix agent on each file.
-      4. Commit corrected files directly to the PR branch.
-      5. Post a summary comment listing what was changed.
+    When a PR comment body is exactly '/fix':
+      1. Post an immediate acknowledgement so the user knows the agent is running.
+      2. Read the previous review body to recover serialized agent findings.
+      3. Fetch each changed Python file from the PR branch.
+      4. Run the fix agent on each file.
+      5. Commit corrected files directly to the PR branch.
+      6. Post a summary comment listing what was changed.
     """
     payload = request.json
     action  = payload.get("action", "")
@@ -176,7 +177,7 @@ def _handle_issue_comment():
         return jsonify({"ok": True, "message": "not a PR comment"})
 
     comment_body = payload.get("comment", {}).get("body", "").strip().lower()
-    if comment_body != "fix":
+    if comment_body != "/fix":
         return jsonify({"ok": True, "message": "not a fix command"})
 
     pr_number = issue["number"]
@@ -188,6 +189,17 @@ def _handle_issue_comment():
         return jsonify({"error": env_error}), 500
 
     client = GitHubClient(token=_GITHUB_TOKEN)
+
+    # Acknowledge immediately so the user knows the agent is working.
+    # The fix agent takes 30-60 seconds — without this the PR looks unresponsive.
+    try:
+        client.post_pr_comment(
+            repo, pr_number,
+            "⏳ Fix agent is running — this usually takes 30–40 seconds. "
+            "A summary will appear when done.",
+        )
+    except Exception as exc:
+        logger.warning("Could not post acknowledgement comment: %s", exc)
 
     # ── Step 1: Get PR branch name ────────────────────────────────────────
     try:

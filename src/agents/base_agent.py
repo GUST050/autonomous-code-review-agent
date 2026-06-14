@@ -77,9 +77,21 @@ class BaseAgent(ABC):
         _system_prompt: Optional[str] = None,
     ) -> Any:
         schema = response_schema or AgentResponse
-        sys_prompt = _system_prompt if _system_prompt is not None else self.get_system_prompt()
+        using_default_prompt = _system_prompt is None
+        sys_prompt = self.get_system_prompt() if using_default_prompt else _system_prompt
+
+        # Review agents receive a git diff. Tell them which lines to focus on.
+        # Fix agents always supply _system_prompt, so this block is skipped for them.
+        diff_note = (
+            "\nDIFF REVIEW RULES: The code below may be a git diff. "
+            "ONLY flag issues in lines starting with '+' (newly added code). "
+            "Lines starting with '-' are removed — ignore them completely. "
+            "Lines with no prefix are unchanged context — use for understanding only.\n"
+            if using_default_prompt else ""
+        )
+
         full_prompt = (
-            f"{sys_prompt}\n\n"
+            f"{sys_prompt}{diff_note}\n\n"
             f"{user_prompt}\n\n"
             f"Output ONLY the structured fields — no XML tags, no markdown, no extra text.\n"
             f"Each finding MUST start with the function name and a colon, "

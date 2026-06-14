@@ -192,7 +192,7 @@ def format_pr_review(
     if max_severity > 0:
         lines += [
             "",
-            "> 💬 Comment **`fix`** on this PR to let the agent commit fixes directly to the branch.",
+            "> 💬 Comment **`/fix`** on this PR to let the agent commit fixes directly to the branch.",
         ]
 
     lines += [
