@@ -12,6 +12,7 @@ import requests
 from config import APPROVAL_THRESHOLD
 from schemas.response import AgentResponse
 from schemas.fix_response import FixResponse
+from utils.diff_parser import FunctionLocation, extract_function_name
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,56 @@ def extract_findings_from_review(body: str) -> Dict[str, dict]:
         return json.loads(base64.b64decode(match.group(1)).decode())
     except Exception:
         return {}
+
+
+# ── Inline comment builder ────────────────────────────────────────────────────
+
+def build_review_comments(
+    results: Dict[str, Optional[AgentResponse]],
+    diff_locations: Dict[str, FunctionLocation],
+) -> List[dict]:
+    """
+    Build the list of inline review comment dicts for the GitHub Reviews API.
+
+    For each finding whose function can be located in the diff, create one
+    inline comment placed on the first added line of that function.  Findings
+    with no matching diff location are omitted here — they remain visible in
+    the review body summary.
+
+    Returns a list ready to pass as the 'comments' field of POST /pulls/reviews.
+    Each dict contains: path, line, side ("RIGHT"), body.
+    """
+    comments: List[dict] = []
+    seen: set = set()  # deduplicate on (path, line, finding_text)
+
+    for agent_name, result in results.items():
+        if not result or not result.findings:
+            continue
+
+        for finding in result.findings:
+            func_name = extract_function_name(finding)
+            if not func_name:
+                continue
+
+            loc = diff_locations.get(func_name)
+            if not loc:
+                continue
+
+            key = (loc.path, loc.line, finding)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            emoji = _finding_emoji(finding)
+            body = f"{emoji}**{agent_name}**\n\n{finding}"
+            comments.append({
+                "path": loc.path,
+                "line": loc.line,
+                "side": "RIGHT",
+                "body": body,
+            })
+
+    return comments
 
 
 # ── PR review body formatter ──────────────────────────────────────────────────
@@ -332,20 +383,40 @@ class GitHubClient:
         pr_number: int,
         body: str,
         event: str,
+        comments: Optional[List[dict]] = None,
     ) -> None:
         """
         Post a formal PR review (shows as Approved / Changes requested / Comment).
         event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+
+        comments: optional list of inline comment dicts, each containing:
+            path (str), line (int), side ("RIGHT"), body (str).
+        If provided, they are attached to specific lines in the diff.
+        If GitHub rejects the inline comments (422), the review is retried
+        without them so the body summary is never lost.
         """
         url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}/reviews"
-        response = requests.post(
-            url,
-            headers=self._headers,
-            json={"body": body, "event": event},
-            timeout=30,
-        )
+        payload: dict = {"body": body, "event": event}
+        if comments:
+            payload["comments"] = comments
+
+        response = requests.post(url, headers=self._headers, json=payload, timeout=30)
+
+        if response.status_code == 422 and comments:
+            # GitHub rejected one or more inline comment positions — fall back
+            # to body-only so the summary review is never silently dropped.
+            logger.warning(
+                "Inline comments rejected by GitHub (422) on %s#%d — retrying without them",
+                repo, pr_number,
+            )
+            payload.pop("comments")
+            response = requests.post(url, headers=self._headers, json=payload, timeout=30)
+
         response.raise_for_status()
-        logger.info("Posted %s review on %s#%d", event, repo, pr_number)
+        logger.info(
+            "Posted %s review on %s#%d (%d inline comments)",
+            event, repo, pr_number, len(comments or []),
+        )
 
     def post_pr_comment(self, repo: str, pr_number: int, body: str) -> None:
         """Post a plain comment on the PR conversation thread."""

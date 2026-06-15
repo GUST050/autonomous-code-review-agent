@@ -25,9 +25,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from flask import Flask, jsonify, request
 
 from review import run_fix, run_review
+from utils.diff_parser import parse_diff_locations
 from utils.github_client import (
     GitHubClient,
     _review_event,
+    build_review_comments,
     extract_findings_from_review,
     format_pr_review,
 )
@@ -134,13 +136,16 @@ def _handle_pull_request():
     results    = final_state.get("results", {})
     fix_result = final_state.get("fix_result")
 
-    # Post formal PR review (findings serialized into a hidden comment inside the body)
+    # Build inline comments — each finding placed on the relevant line in the diff
+    diff_locations   = parse_diff_locations(diff)
+    inline_comments  = build_review_comments(results, diff_locations)
+
     max_severity = max((r.severity for r in results.values() if r), default=0)
     review_body  = format_pr_review(results, fix_result)
     review_event = _review_event(max_severity)
 
     try:
-        client.post_pr_review(repo, pr_number, review_body, review_event)
+        client.post_pr_review(repo, pr_number, review_body, review_event, inline_comments)
     except Exception as exc:
         logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500

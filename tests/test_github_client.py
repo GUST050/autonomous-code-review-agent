@@ -9,11 +9,13 @@ import pytest
 
 from schemas.response import AgentResponse
 from schemas.fix_response import FixResponse
+from utils.diff_parser import FunctionLocation
 from utils.github_client import (
     GitHubClient,
     _embed_findings,
     _review_event,
     _severity_emoji,
+    build_review_comments,
     extract_findings_from_review,
     format_pr_review,
 )
@@ -202,6 +204,103 @@ class TestFormatPrReview:
         body = format_pr_review(results)
         # The marker must be present even for clean reviews
         assert "agent-findings-v1" in body
+
+
+class TestBuildReviewComments:
+    """Unit tests for build_review_comments — no HTTP calls."""
+
+    def _result(self, severity, findings, locations=None):
+        return AgentResponse(
+            reasoning="test",
+            findings=findings,
+            severity=severity,
+            locations=locations or [],
+        )
+
+    def _loc(self, path="src/app.py", line=10):
+        return FunctionLocation(path=path, line=line)
+
+    def test_finding_with_matching_location_creates_comment(self):
+        results = {"Injection Expert": self._result(80, ["[HIGH] login(): SQL injection"])}
+        locs = {"login": self._loc(line=42)}
+        comments = build_review_comments(results, locs)
+        assert len(comments) == 1
+        assert comments[0]["path"] == "src/app.py"
+        assert comments[0]["line"] == 42
+        assert comments[0]["side"] == "RIGHT"
+
+    def test_comment_body_contains_agent_name(self):
+        results = {"Auth Expert": self._result(70, ["[HIGH] login(): missing rate limit"])}
+        locs = {"login": self._loc()}
+        comments = build_review_comments(results, locs)
+        assert "Auth Expert" in comments[0]["body"]
+
+    def test_comment_body_contains_finding_text(self):
+        finding = "[HIGH] login(): SQL injection via f-string"
+        results = {"Injection Expert": self._result(80, [finding])}
+        locs = {"login": self._loc()}
+        comments = build_review_comments(results, locs)
+        assert finding in comments[0]["body"]
+
+    def test_finding_with_no_matching_location_excluded(self):
+        results = {"Injection Expert": self._result(80, ["[HIGH] unknown_func(): issue"])}
+        locs = {"login": self._loc()}  # 'unknown_func' not in locs
+        comments = build_review_comments(results, locs)
+        assert comments == []
+
+    def test_multiple_findings_same_function_create_multiple_comments(self):
+        results = {"Injection Expert": self._result(80, [
+            "[HIGH] login(): SQL injection",
+            "[MEDIUM] login(): path traversal",
+        ])}
+        locs = {"login": self._loc(line=10)}
+        comments = build_review_comments(results, locs)
+        assert len(comments) == 2
+
+    def test_different_agents_same_function_both_commented(self):
+        results = {
+            "Injection Expert": self._result(80, ["[HIGH] login(): SQL injection"]),
+            "Auth Expert":      self._result(70, ["[HIGH] login(): missing rate limit"]),
+        }
+        locs = {"login": self._loc(line=10)}
+        comments = build_review_comments(results, locs)
+        assert len(comments) == 2
+        agents = {c["body"].split("\n")[0] for c in comments}
+        assert any("Injection Expert" in a for a in agents)
+        assert any("Auth Expert" in a for a in agents)
+
+    def test_duplicate_finding_deduplicated(self):
+        finding = "[HIGH] login(): SQL injection"
+        results = {"Injection Expert": self._result(80, [finding, finding])}
+        locs = {"login": self._loc(line=10)}
+        comments = build_review_comments(results, locs)
+        assert len(comments) == 1
+
+    def test_empty_results_returns_empty_list(self):
+        assert build_review_comments({}, {}) == []
+
+    def test_none_result_skipped(self):
+        results = {"Injection Expert": None}
+        locs = {"login": self._loc()}
+        assert build_review_comments(results, locs) == []
+
+    def test_finding_with_no_function_name_excluded(self):
+        results = {"Secrets Expert": self._result(60, ["module-level hardcoded API key"])}
+        locs = {"login": self._loc()}
+        assert build_review_comments(results, locs) == []
+
+    def test_critical_finding_has_emoji_prefix(self):
+        results = {"Injection Expert": self._result(95, ["[CRITICAL] login(): RCE via eval()"])}
+        locs = {"login": self._loc()}
+        comments = build_review_comments(results, locs)
+        assert "🔴" in comments[0]["body"]
+
+    def test_correct_path_from_location(self):
+        results = {"Injection Expert": self._result(80, ["[HIGH] query(): SQL injection"])}
+        locs = {"query": FunctionLocation(path="db/queries.py", line=55)}
+        comments = build_review_comments(results, locs)
+        assert comments[0]["path"] == "db/queries.py"
+        assert comments[0]["line"] == 55
 
 
 class TestGitHubClient:
