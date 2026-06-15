@@ -69,12 +69,12 @@ GPT4O_MINI = ModelConfig(
 # OpenAI:    broad code understanding → quality and style
 
 AGENT_CONFIGS: dict[str, ModelConfig] = {
-    "Injection Expert":   CLAUDE_HAIKU,   # Anthropic — security precision
-    "Auth Expert":        CLAUDE_HAIKU,   # Anthropic — security precision
-    "Secrets Expert":     GROK_MINI,      # xAI — pattern recognition
-    "Performance Expert": GROK_MINI,      # xAI — algorithmic reasoning
-    "Code Quality Expert": GPT4O_MINI,    # OpenAI — code style and structure
-    "Fix Generator":      CLAUDE_SONNET,  # Anthropic Sonnet — code generation
+    "Injection Expert":    CLAUDE_HAIKU,   # Anthropic — precise rule following, security judgment
+    "Auth Expert":         CLAUDE_HAIKU,   # Anthropic — precise rule following, security judgment
+    "Secrets Expert":      CLAUDE_HAIKU,   # Anthropic — contextual judgment (real secret vs placeholder)
+    "Performance Expert":  GROK_MINI,      # xAI — mathematical/algorithmic reasoning (Big O, N+1)
+    "Code Quality Expert": GPT4O_MINI,     # OpenAI — broad code style knowledge, lowest stakes
+    "Fix Generator":       CLAUDE_SONNET,  # Anthropic Sonnet — best-in-class code generation
 }
 
 # Fast model for fix generation when max severity is below APPROVAL_THRESHOLD

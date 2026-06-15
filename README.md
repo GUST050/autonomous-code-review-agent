@@ -20,7 +20,7 @@ Comment `/fix` on any PR → the fix agent commits corrected code directly to th
 |-------|-------|-------------------|
 | Injection Expert | Claude Haiku | SQL injection, XSS, SSTI, SSRF, path traversal, insecure deserialization |
 | Auth Expert | Claude Haiku | Broken auth, IDOR, CSRF, missing rate limiting, privilege escalation |
-| Secrets Expert | Grok Mini | Hardcoded credentials, weak cryptography, plaintext sensitive data |
+| Secrets Expert | Claude Haiku | Hardcoded credentials, weak cryptography, plaintext sensitive data |
 | Performance Expert | Grok Mini | O(n²) algorithms, N+1 queries, inefficient data structures |
 | Code Quality Expert | GPT-4o Mini | Naming, type hints, SRP violations, cognitive complexity |
 
