@@ -16,6 +16,7 @@ from utils.github_client import (
     _review_event,
     _severity_emoji,
     build_review_comments,
+    build_suggestion_comments,
     extract_findings_from_review,
     format_pr_review,
 )
@@ -301,6 +302,132 @@ class TestBuildReviewComments:
         comments = build_review_comments(results, locs)
         assert comments[0]["path"] == "db/queries.py"
         assert comments[0]["line"] == 55
+
+
+class TestBuildSuggestionComments:
+    """Tests for build_suggestion_comments — no HTTP calls."""
+
+    _SIMPLE_SOURCE = (
+        "def login(user, pw):\n"    # line 1
+        "    return True\n"          # line 2
+        "\n"                         # line 3
+        "def logout():\n"            # line 4
+        "    pass\n"                 # line 5
+    )
+
+    def _all_lines(self, source: str) -> set:
+        """Return a set containing every line number in source (1-indexed)."""
+        return set(range(1, source.count("\n") + 2))
+
+    def test_function_in_diff_becomes_suggestion(self):
+        fixed = {"login": "def login(user, pw):\n    check_rate_limit()\n    return True\n"}
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, fallback = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert len(comments) == 1
+        assert fallback == []
+
+    def test_suggestion_has_correct_path(self):
+        fixed = {"login": "def login(user, pw):\n    pass\n"}
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, _ = build_suggestion_comments(
+            fixed, "src/auth.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert comments[0]["path"] == "src/auth.py"
+
+    def test_suggestion_body_is_code_block(self):
+        fixed_src = "def login(user, pw):\n    check()\n    return True"
+        fixed = {"login": fixed_src}
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, _ = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert comments[0]["body"].startswith("```suggestion\n")
+        assert "```" in comments[0]["body"]
+
+    def test_suggestion_contains_fixed_code(self):
+        fixed_src = "def login(user, pw):\n    check_rate_limit()\n    return True"
+        fixed = {"login": fixed_src}
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, _ = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert "check_rate_limit" in comments[0]["body"]
+
+    def test_multiline_suggestion_has_start_and_end_line(self):
+        fixed = {"login": "def login(user, pw):\n    check()\n    return True\n"}
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, _ = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert "start_line" in comments[0]
+        assert "line" in comments[0]
+        assert comments[0]["start_line"] == 1
+        assert comments[0]["line"] == 2
+
+    def test_function_not_in_diff_goes_to_fallback(self):
+        fixed = {"login": "def login(user, pw):\n    check()\n    return True\n"}
+        diff_lines = {3, 4, 5}  # only logout() lines visible in diff
+        comments, fallback = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert comments == []
+        assert len(fallback) == 1
+        assert fallback[0][0] == "login"
+
+    def test_unknown_function_goes_to_fallback(self):
+        fixed = {"nonexistent": "def nonexistent():\n    pass\n"}
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, fallback = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert comments == []
+        assert fallback[0][0] == "nonexistent"
+
+    def test_empty_function_fixes_returns_empty(self):
+        comments, fallback = build_suggestion_comments(
+            {}, "app.py", self._SIMPLE_SOURCE, {1, 2, 3}
+        )
+        assert comments == []
+        assert fallback == []
+
+    def test_invalid_source_puts_all_in_fallback(self):
+        fixed = {"login": "def login():\n    pass\n"}
+        comments, fallback = build_suggestion_comments(
+            fixed, "app.py", "def broken(", {1, 2, 3}
+        )
+        assert comments == []
+        assert len(fallback) == 1
+
+    def test_side_is_right(self):
+        fixed = {"login": "def login(user, pw):\n    pass\n"}
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, _ = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert comments[0]["side"] == "RIGHT"
+
+    def test_multiple_functions_both_in_diff(self):
+        fixed = {
+            "login":  "def login(user, pw):\n    check()\n    return True\n",
+            "logout": "def logout():\n    clear_session()\n",
+        }
+        diff_lines = self._all_lines(self._SIMPLE_SOURCE)
+        comments, fallback = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert len(comments) == 2
+        assert fallback == []
+
+    def test_fallback_contains_fixed_source(self):
+        fixed_src = "def login(user, pw):\n    check()\n    return True\n"
+        fixed = {"login": fixed_src}
+        diff_lines = set()  # nothing in diff
+        _, fallback = build_suggestion_comments(
+            fixed, "app.py", self._SIMPLE_SOURCE, diff_lines
+        )
+        assert fallback[0][1] == fixed_src
 
 
 class TestGitHubClient:

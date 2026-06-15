@@ -12,7 +12,7 @@ import requests
 from config import APPROVAL_THRESHOLD
 from schemas.response import AgentResponse
 from schemas.fix_response import FixResponse
-from utils.diff_parser import FunctionLocation, extract_function_name
+from utils.diff_parser import FunctionLocation, extract_function_name, get_function_ranges, get_diff_line_set
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,69 @@ def build_review_comments(
             })
 
     return comments
+
+
+# ── Suggestion comment builder ───────────────────────────────────────────────
+
+def build_suggestion_comments(
+    function_fixes: Dict[str, str],
+    file_path: str,
+    original_source: str,
+    diff_line_set: set,
+) -> tuple:
+    """
+    Build GitHub suggestion comments for fixed functions.
+
+    Uses AST to get exact function line ranges from the original source, then
+    checks that every line in the range is visible in the diff.  Only functions
+    whose full range is in the diff become suggestions — the user clicks
+    "Commit suggestion" to apply each one individually.
+
+    Functions whose lines are not fully visible in the diff are returned in
+    fallback so the caller can post them as collapsible copy-paste comments.
+
+    Args:
+        function_fixes:  {func_name: fixed_source} — only changed functions
+        file_path:       relative path of the file in the repo, e.g. "src/app.py"
+        original_source: full content of the original file (used for AST ranges)
+        diff_line_set:   set of line numbers visible in the diff for this file
+
+    Returns:
+        (comments, fallback) where:
+          comments  — list of inline comment dicts for GitHub Reviews API
+          fallback  — list of (func_name, fixed_source) for functions that
+                      cannot be placed as inline suggestions
+    """
+    func_ranges = get_function_ranges(original_source)
+    comments: List[dict] = []
+    fallback: List[tuple] = []
+
+    for func_name, fixed_source in function_fixes.items():
+        if func_name not in func_ranges:
+            fallback.append((func_name, fixed_source))
+            continue
+
+        start, end = func_ranges[func_name]
+
+        # Every line in the function's range must appear in the diff.
+        # GitHub rejects suggestions that reference lines outside any hunk.
+        if not all(ln in diff_line_set for ln in range(start, end + 1)):
+            fallback.append((func_name, fixed_source))
+            continue
+
+        code = fixed_source.rstrip("\n")
+        body = f"```suggestion\n{code}\n```"
+        comment: dict = {"path": file_path, "side": "RIGHT", "body": body}
+        if start == end:
+            comment["line"] = start
+        else:
+            comment["start_line"] = start
+            comment["start_side"] = "RIGHT"
+            comment["line"] = end
+
+        comments.append(comment)
+
+    return comments, fallback
 
 
 # ── PR review body formatter ──────────────────────────────────────────────────

@@ -200,10 +200,20 @@ class FixGeneratorAgent(BaseAgent):
             for item in fix.unfixable:
                 seen_unfixable[item] = None
 
+        # Collect per-function fixed sources for functions that actually changed.
+        # Used by the webhook to post GitHub suggestions instead of auto-committing.
+        function_fixes: dict = {}
+        for section in sections:
+            if section.name in func_fixes:
+                fix = func_fixes[section.name]
+                if fix.fixed_code.strip() != section.source.strip():
+                    function_fixes[section.name] = fix.fixed_code
+
         return FixResponse(
             fixed_code=fixed_code,
             changes=all_changes,
             unfixable=list(seen_unfixable.keys()),
+            function_fixes=function_fixes,
         )
 
     # ── Private: parallel orchestration ──────────────────────────────────────

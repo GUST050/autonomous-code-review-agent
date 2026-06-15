@@ -4,12 +4,16 @@ diff_parser.py — Parse unified diffs to map function names to file positions.
 Used by the review webhook to place inline GitHub review comments directly
 on the added lines where issues were found, rather than in a single review
 body block at the bottom of the PR.
+
+Also provides get_function_ranges() (AST-based) and get_diff_line_set() so
+the fix handler can build GitHub suggestions placed on the correct line range.
 """
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Set, Tuple
 
 
 @dataclass
@@ -109,6 +113,78 @@ def parse_diff_locations(diff_text: str) -> Dict[str, FunctionLocation]:
 
     _flush()
     return locations
+
+
+def get_function_ranges(source: str) -> Dict[str, Tuple[int, int]]:
+    """
+    AST-parse a Python source file and return the line range of every
+    top-level function or async def.
+
+    Returns {function_name: (start_line, end_line)} where both values are
+    1-indexed and end_line is the last line of the function body inclusive.
+    Returns {} if the source cannot be parsed (syntax error or empty).
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    ranges: Dict[str, Tuple[int, int]] = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            ranges[node.name] = (node.lineno, node.end_lineno)
+    return ranges
+
+
+def get_diff_line_set(diff_text: str) -> Dict[str, Set[int]]:
+    """
+    Parse a unified diff and return the set of line numbers visible in
+    each file — both added (+) and context lines.
+
+    Used to verify that a start_line/end_line range is valid for a GitHub
+    suggestion comment before posting.  GitHub rejects suggestions whose
+    line numbers do not appear in any diff hunk.
+
+    Returns {file_path: set_of_line_numbers}.
+    """
+    line_sets: Dict[str, Set[int]] = {}
+    current_file: Optional[str] = None
+    new_line_num = 0
+
+    for raw in diff_text.splitlines():
+        if raw.startswith("+++ b/"):
+            current_file = raw[6:]
+            line_sets.setdefault(current_file, set())
+            new_line_num = 0
+            continue
+        if (
+            raw.startswith("diff --git")
+            or raw.startswith("--- ")
+            or raw.startswith("+++ ")
+            or raw.startswith("index ")
+            or raw.startswith("new file")
+            or raw.startswith("deleted file")
+            or raw.startswith("\\ No newline")
+        ):
+            continue
+
+        hunk = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+        if hunk:
+            new_line_num = int(hunk.group(1)) - 1
+            continue
+
+        if current_file is None:
+            continue
+
+        if raw.startswith("-"):
+            continue  # removed lines don't exist in new file
+        elif raw.startswith("+"):
+            new_line_num += 1
+            line_sets[current_file].add(new_line_num)
+        else:
+            new_line_num += 1
+            line_sets[current_file].add(new_line_num)
+
+    return line_sets
 
 
 def extract_function_name(finding: str) -> Optional[str]:

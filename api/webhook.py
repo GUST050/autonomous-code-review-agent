@@ -25,11 +25,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from flask import Flask, jsonify, request
 
 from review import run_fix, run_review
-from utils.diff_parser import parse_diff_locations
+from utils.diff_parser import get_diff_line_set, parse_diff_locations
 from utils.github_client import (
     GitHubClient,
     _review_event,
     build_review_comments,
+    build_suggestion_comments,
     extract_findings_from_review,
     format_pr_review,
 )
@@ -259,58 +260,101 @@ def _handle_issue_comment():
         client.post_pr_comment(repo, pr_number, "ℹ️ No Python files changed in this PR.")
         return jsonify({"ok": True, "message": "no python files"})
 
-    # ── Step 4: Fix and commit each file ─────────────────────────────────
-    all_changes:   list = []
-    all_unfixable: list = []
-    errors:        list = []
+    # ── Step 4: Fetch diff to know which lines are visible ────────────────
+    try:
+        pr_diff      = client.get_pr_diff(repo, pr_number)
+        diff_line_sets = get_diff_line_set(pr_diff)
+    except Exception as exc:
+        logger.warning("Could not fetch diff for suggestions: %s — continuing", exc)
+        diff_line_sets = {}
+
+    # ── Step 5: Fix each file and build per-function suggestions ──────────
+    all_suggestion_comments: list = []
+    all_fallback:            list = []   # [(func_name, fixed_src, file_path)]
+    all_unfixable:           list = []
+    all_changes:             list = []
+    errors:                  list = []
 
     for file_info in python_files:
         path = file_info["filename"]
-        logger.info("Fixing %s on branch %s", path, branch)
+        logger.info("Fixing %s", path)
 
         try:
             file_data  = client.get_file_content(repo, path, branch)
             fix_result = run_fix(file_data["content"], findings_data)
 
-            code_changed = (
-                fix_result.fixed_code
-                and fix_result.fixed_code != file_data["content"]
-            )
-            if code_changed:
-                commit_msg = "auto-fix: " + "; ".join(fix_result.changes[:3])
-                if len(fix_result.changes) > 3:
-                    commit_msg += f" (+{len(fix_result.changes) - 3} more)"
-
-                client.commit_file(
-                    repo=repo,
-                    path=path,
-                    content=fix_result.fixed_code,
-                    sha=file_data["sha"],
-                    branch=branch,
-                    message=commit_msg,
-                )
-                all_changes.extend(fix_result.changes)
-                logger.info(
-                    "Committed %d fix(es) to %s on branch %s",
-                    len(fix_result.changes), path, branch,
-                )
-            else:
-                logger.info("No code change in %s — skipping commit", path)
-
+            all_changes.extend(fix_result.changes)
             all_unfixable.extend(fix_result.unfixable or [])
+
+            if not fix_result.function_fixes:
+                logger.info("No function-level changes for %s", path)
+                continue
+
+            # Build suggestions for functions visible in the diff;
+            # collect fallbacks for functions outside any diff hunk.
+            diff_lines = diff_line_sets.get(path, set())
+            suggestions, fallback = build_suggestion_comments(
+                fix_result.function_fixes,
+                path,
+                file_data["content"],
+                diff_lines,
+            )
+            all_suggestion_comments.extend(suggestions)
+            all_fallback.extend((name, src, path) for name, src in fallback)
+            logger.info(
+                "%s: %d suggestion(s), %d fallback(s)",
+                path, len(suggestions), len(fallback),
+            )
 
         except Exception as exc:
             logger.error("Failed to fix %s: %s", path, exc)
             errors.append(f"`{path}`: {exc}")
 
-    # ── Step 5: Post summary comment ──────────────────────────────────────
-    summary_lines = ["## 🔧 Auto-Fix Results\n"]
+    # ── Step 6: Post suggestions as a review (user accepts per fix) ───────
+    if all_suggestion_comments:
+        suggestion_body = (
+            "## 🔧 Fix Suggestions\n\n"
+            "Each suggestion below replaces one function. "
+            "Click **Commit suggestion** on those you want — skip the ones you don't."
+        )
+        try:
+            client.post_pr_review(
+                repo, pr_number, suggestion_body, "COMMENT", all_suggestion_comments
+            )
+            logger.info(
+                "Posted %d suggestion(s) on %s#%d",
+                len(all_suggestion_comments), repo, pr_number,
+            )
+        except Exception as exc:
+            logger.error("Could not post suggestions on %s#%d: %s", repo, pr_number, exc)
+            errors.append(f"Could not post suggestions: {exc}")
 
-    if all_changes:
-        summary_lines.append("**Applied fixes:**")
-        for change in all_changes:
-            summary_lines.append(f"- ✅ {change}")
-        summary_lines.append("")
+    # ── Step 7: Post summary comment ──────────────────────────────────────
+    summary_lines = ["## 🔧 Fix Summary\n"]
+
+    if all_suggestion_comments:
+        n = len(all_suggestion_comments)
+        summary_lines.append(
+            f"**{n} inline suggestion{'s' if n != 1 else ''} posted above** — "
+            "accept each one individually with **Commit suggestion**.\n"
+        )
+
+    if all_fallback:
+        summary_lines.append(
+            "**Fixes for functions outside this PR's diff (copy-paste manually):**\n"
+        )
+        for func_name, fixed_src, file_path in all_fallback:
+            summary_lines += [
+                "<details>",
+                f"<summary><code>{func_name}()</code> in <code>{file_path}</code></summary>",
+                "",
+                "```python",
+                fixed_src.strip(),
+                "```",
+                "",
+                "</details>",
+                "",
+            ]
 
     if all_unfixable:
         summary_lines.append("**Requires manual intervention:**")
@@ -324,16 +368,17 @@ def _handle_issue_comment():
             summary_lines.append(f"- ❌ {err}")
         summary_lines.append("")
 
-    if not all_changes and not errors:
+    if not all_suggestion_comments and not all_fallback and not errors:
         summary_lines.append("ℹ️ No auto-fixable issues were found in the changed files.")
 
     client.post_pr_comment(repo, pr_number, "\n".join(summary_lines))
 
     return jsonify({
-        "ok":       True,
-        "changes":  len(all_changes),
-        "unfixable": len(all_unfixable),
-        "errors":   len(errors),
+        "ok":          True,
+        "suggestions": len(all_suggestion_comments),
+        "fallback":    len(all_fallback),
+        "unfixable":   len(all_unfixable),
+        "errors":      len(errors),
     })
 
 

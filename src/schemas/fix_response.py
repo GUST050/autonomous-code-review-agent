@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import Dict, List
 
 
 class FixResponse(BaseModel):
@@ -21,4 +21,12 @@ class FixResponse(BaseModel):
             "architectural decisions). One sentence each explaining why it cannot be auto-fixed."
         ),
         default_factory=list,
+    )
+    function_fixes: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Per-function fixed source code for functions that were actually changed. "
+            "key = function name, value = complete fixed function source (no trailing blanks). "
+            "Populated by FixGeneratorAgent.generate_fixes(); not set by the LLM."
+        ),
     )
