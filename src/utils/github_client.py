@@ -72,6 +72,20 @@ def extract_findings_from_review(body: str) -> Dict[str, dict]:
 
 # ── PR review body formatter ──────────────────────────────────────────────────
 
+def _finding_emoji(finding: str) -> str:
+    """Map [SEVERITY] tag at the start of a finding string to a leading emoji."""
+    f = finding.upper()
+    if f.startswith("[CRITICAL]"):
+        return "🔴 "
+    if f.startswith("[HIGH]"):
+        return "🟠 "
+    if f.startswith("[MEDIUM]"):
+        return "🟡 "
+    if f.startswith("[LOW]"):
+        return "🟢 "
+    return ""
+
+
 def _severity_emoji(severity: int) -> str:
     if severity >= APPROVAL_THRESHOLD:
         return "🔴"
@@ -138,7 +152,7 @@ def format_pr_review(
             "",
         ]
         for finding in result.findings:
-            lines.append(f"- {finding}")
+            lines.append(f"- {_finding_emoji(finding)}{finding}")
 
         if result.references:
             lines.append("")

@@ -87,6 +87,9 @@ class BaseAgent(ABC):
             "ONLY flag issues in lines starting with '+' (newly added code). "
             "Lines starting with '-' are removed — ignore them completely. "
             "Lines with no prefix are unchanged context — use for understanding only.\n"
+            "\nCONFIDENCE RULE: Only report findings where you are 80%+ confident an issue "
+            "actually exists. A false positive wastes developer time and erodes trust in the "
+            "tool. When in doubt, omit the finding entirely.\n"
             if using_default_prompt else ""
         )
 
@@ -94,8 +97,10 @@ class BaseAgent(ABC):
             f"{sys_prompt}{diff_note}\n\n"
             f"{user_prompt}\n\n"
             f"Output ONLY the structured fields — no XML tags, no markdown, no extra text.\n"
-            f"Each finding MUST start with the function name and a colon, "
-            f"e.g. 'login(): SQL injection via f-string'.\n"
+            f"Each finding MUST use this format: "
+            f"'[SEVERITY] function(): issue — concrete impact'. "
+            f"SEVERITY must be one of: CRITICAL, HIGH, MEDIUM, LOW. "
+            f"Example: '[HIGH] login(): SQL injection via f-string — attacker can dump all passwords'.\n"
             f"For `locations`, list every affected function name (bare name, no parentheses), "
             f"e.g. ['login', 'get_user']."
         )

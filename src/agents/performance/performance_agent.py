@@ -21,15 +21,23 @@ class PerformanceAgent(ReviewAgent):
 SCOPE:
 - Algorithmic complexity: O(n²) or worse when O(n) or O(n log n) is achievable
 - N+1 query problems: database or API calls inside loops
-- Inefficient data structures: list when a set or dict lookup would be O(1)
-- Redundant computation: recalculating the same value repeatedly in a loop
-- Memory waste: loading entire datasets when streaming or pagination would suffice
-- String concatenation in loops instead of list + join
-- Missing caching for expensive repeated operations
+- Inefficient data structures: list membership check (x in list) instead of set/dict O(1) lookup
+- Redundant computation: recalculating the same expensive value repeatedly in a loop
+- Memory waste: loading entire large datasets into memory when streaming/pagination would suffice
+- Missing caching for proven-expensive repeated operations
 - Unnecessary iterations or passes over the same data
 
-For each finding: state the current complexity (e.g. O(n²)), the achievable complexity (e.g. O(n)),
-the input scale at which it becomes a real problem, and a sketch of the optimal approach.
+DO NOT FLAG these (they are fine in practice):
+- Simple for/while loops over small or fixed-size collections — NOT a performance issue
+- range(len(x)) — only flag if the loop body itself is O(n), making the whole thing O(n²)
+- f-strings or string formatting — these are fast in modern Python, NOT performance issues
+- list.append() in a loop that builds a result list — correct Python pattern, NOT an issue
+- Sorting a list once — O(n log n), acceptable unless inside another loop
+- Any issue where the realistic input size would never cause a measurable slowdown
+
+Only report issues that would cause a real slowdown at scales the code is likely to encounter.
+For each finding: state the current complexity, the achievable complexity, the realistic input
+scale at which it becomes a problem (e.g. "slows noticeably at n>10,000 records"), and the fix.
 
 Security, secrets, and quality are handled by other agents — ignore them entirely.
 

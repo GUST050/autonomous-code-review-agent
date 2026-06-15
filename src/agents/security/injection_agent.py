@@ -24,7 +24,15 @@ insecure deserialization (pickle.loads/marshal.loads/yaml.load with untrusted in
 SSRF (Server-Side Request Forgery — user-controlled URL passed to requests.get/urllib/httpx).
 Auth, secrets, performance, and quality are handled by other agents — ignore them entirely.
 
-For each finding: name the injection type, show the exact vulnerable code pattern,
+DO NOT FLAG these safe patterns (they are correct code, not vulnerabilities):
+- Parameterized queries: cursor.execute(sql, (param,)) or cursor.execute(sql, [param]) — SAFE
+- ORM queries: Model.objects.filter(field=value), session.query(Model).filter_by(...) — SAFE
+- SQL strings with only hardcoded/constant values and no user input flowing in — SAFE
+- requests.get(url) where url is a hardcoded string or from config, not from user input — SAFE
+- Jinja2 {{ variable }} templates (auto-escaped by default) — SAFE unless Markup() wraps untrusted input
+- yaml.safe_load() — SAFE (only yaml.load() with Loader=Loader or no loader is dangerous)
+
+For each finding you DO report: name the injection type, show the exact vulnerable code pattern,
 describe a concrete attack payload, and explain what an attacker can achieve.
 
 {SEVERITY_SCALE}"""
