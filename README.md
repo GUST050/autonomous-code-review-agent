@@ -32,14 +32,13 @@ Each finding includes a severity tag (`[CRITICAL]`, `[HIGH]`, `[MEDIUM]`, `[LOW]
 
 ### 1. Deploy to Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FGUST050%2Fautonomous-code-review-agent&env=ANTHROPIC_API_KEY,XAI_API_KEY,OPENAI_API_KEY,GITHUB_TOKEN,GITHUB_WEBHOOK_SECRET&envDescription=API+keys+for+LLM+providers+and+GitHub+integration&project-name=code-review-agent&repository-name=autonomous-code-review-agent)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FGUST050%2Fautonomous-code-review-agent&env=ANTHROPIC_API_KEY,OPENAI_API_KEY,GITHUB_TOKEN,GITHUB_WEBHOOK_SECRET&envDescription=API+keys+for+LLM+providers+and+GitHub+integration&project-name=code-review-agent&repository-name=autonomous-code-review-agent)
 
 Vercel will ask for five environment variables during deployment:
 
 | Variable | Where to get it |
 |----------|----------------|
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
-| `XAI_API_KEY` | [console.x.ai](https://console.x.ai) |
 | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) |
 | `GITHUB_TOKEN` | GitHub → Settings → Developer settings → Personal access tokens → Generate new token (classic). Required scopes: `repo` |
 | `GITHUB_WEBHOOK_SECRET` | Any random string — you'll use the same value on GitHub in the next step |
@@ -127,8 +126,7 @@ pytest tests/
 
 ```env
 # LLM API Keys
-ANTHROPIC_API_KEY=sk-ant-...      # Injection Expert, Auth Expert, Fix Generator
-XAI_API_KEY=xai-...               # Secrets Expert, Performance Expert
+ANTHROPIC_API_KEY=sk-ant-...      # Injection Expert, Auth Expert, Secrets Expert, Performance Expert, Fix Generator
 OPENAI_API_KEY=sk-...             # Code Quality Expert
 
 # GitHub

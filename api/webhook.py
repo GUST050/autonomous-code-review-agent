@@ -10,7 +10,6 @@ Environment variables (set in Vercel dashboard):
   GITHUB_TOKEN          Personal Access Token with repo + PR review permissions
   ANTHROPIC_API_KEY     Your Anthropic API key
   OPENAI_API_KEY        Your OpenAI API key
-  XAI_API_KEY           Your xAI API key
   GITHUB_WEBHOOK_SECRET Secret you chose when setting up the webhook on GitHub
 """
 import hashlib

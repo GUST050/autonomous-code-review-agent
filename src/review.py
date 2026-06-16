@@ -9,7 +9,6 @@ from typing import Dict, Optional
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
-from langchain_xai import ChatXAI
 
 from agents import (
     InjectionAgent,
@@ -33,12 +32,6 @@ def _build_llm(config):
     """Instantiate the correct LLM provider from a ModelConfig."""
     if config.provider == "anthropic":
         return ChatAnthropic(
-            model=config.model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-        )
-    if config.provider == "xai":
-        return ChatXAI(
             model=config.model,
             temperature=config.temperature,
             max_tokens=config.max_tokens,

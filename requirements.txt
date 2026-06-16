@@ -56,7 +56,6 @@ langchain-google-genai==2.1.12
 langchain-groq==0.3.8
 langchain-openai==0.3.35
 langchain-text-splitters==0.3.11
-langchain-xai==0.2.5
 langgraph==0.6.11
 langgraph-checkpoint==2.1.2
 langgraph-prebuilt==0.6.5
@@ -131,3 +130,4 @@ yarl==1.22.0
 zipp==3.23.1
 zstandard==0.25.0
 flask
+gunicorn

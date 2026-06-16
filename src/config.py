@@ -45,14 +45,6 @@ CLAUDE_SONNET = ModelConfig(
     output_cost_per_million=15.00,
 )
 
-GROK_MINI = ModelConfig(
-    model="grok-3-mini",
-    provider="xai",
-    temperature=0.1,
-    max_tokens=1500,
-    input_cost_per_million=0.30,
-    output_cost_per_million=0.50,
-)
 
 GPT4O_MINI = ModelConfig(
     model="gpt-4o-mini",
@@ -72,7 +64,7 @@ AGENT_CONFIGS: dict[str, ModelConfig] = {
     "Injection Expert":    CLAUDE_HAIKU,   # Anthropic — precise rule following, security judgment
     "Auth Expert":         CLAUDE_HAIKU,   # Anthropic — precise rule following, security judgment
     "Secrets Expert":      CLAUDE_HAIKU,   # Anthropic — contextual judgment (real secret vs placeholder)
-    "Performance Expert":  GROK_MINI,      # xAI — mathematical/algorithmic reasoning (Big O, N+1)
+    "Performance Expert":  CLAUDE_HAIKU,   # Anthropic — fast, sufficient for N+1 and Big O detection
     "Code Quality Expert": GPT4O_MINI,     # OpenAI — broad code style knowledge, lowest stakes
     "Fix Generator":       CLAUDE_SONNET,  # Anthropic Sonnet — best-in-class code generation
 }
