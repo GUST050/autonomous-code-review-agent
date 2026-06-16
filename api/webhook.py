@@ -2,14 +2,14 @@
 webhook.py — Flask app that receives GitHub webhook events.
 
 Handles pull_request events (opened, synchronize, reopened):
-  1. Fetches the full content of every changed Python file.
-  2. Runs all five review agents in parallel.
-  3. If issues are found, runs the fix agent immediately (part of the same pipeline).
-  4. Posts one unified PR review: findings in the body, fixes as inline suggestions.
+  1. Fetches diff + PR metadata + file list in parallel.
+  2. Fetches all changed Python file contents in parallel.
+  3. Runs all five review agents in parallel.
+  4. Posts one PR review: findings in body, inline comments on diff lines.
 
 Environment variables:
   GITHUB_TOKEN          Personal Access Token with repo + PR review permissions
-  ANTHROPIC_API_KEY     Anthropic API key (Haiku for review, Sonnet for fixes)
+  ANTHROPIC_API_KEY     Anthropic API key (Haiku agents)
   OPENAI_API_KEY        OpenAI API key (GPT-4o-mini for code quality)
   GITHUB_WEBHOOK_SECRET Secret set when configuring the webhook on GitHub
 """
@@ -18,19 +18,19 @@ import hmac
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
-from review import run_fix_from_responses, run_review
-from utils.diff_parser import get_diff_line_set, parse_diff_locations
+from review import run_review
+from utils.diff_parser import parse_diff_locations
 from utils.github_client import (
     GitHubClient,
     _review_event,
     build_review_comments,
-    build_suggestion_comments,
     format_pr_review,
 )
 
@@ -54,7 +54,6 @@ def _valid_signature(payload: bytes, signature: str) -> bool:
 
 
 def _check_env() -> Optional[str]:
-    """Return an error message if required env vars are missing, else None."""
     if not _GITHUB_TOKEN:
         return "GITHUB_TOKEN not configured"
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -64,7 +63,6 @@ def _check_env() -> Optional[str]:
 
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
-    # ── 1. Validate HMAC signature ────────────────────────────────────────
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not _valid_signature(request.get_data(), signature):
         logger.warning("Rejected request with invalid signature")
@@ -81,12 +79,9 @@ def webhook():
     return jsonify({"ok": True, "message": "ignored"})
 
 
-# ── pull_request handler ──────────────────────────────────────────────────────
-
 def _handle_pull_request():
-    """Review new/updated PR: run all agents, fix inline, post one unified review."""
-    payload = request.json
-    action  = payload.get("action", "")
+    payload   = request.json
+    action    = payload.get("action", "")
 
     if action not in ("opened", "synchronize", "reopened"):
         return jsonify({"ok": True, "message": "ignored"})
@@ -101,45 +96,54 @@ def _handle_pull_request():
 
     client = GitHubClient(token=_GITHUB_TOKEN)
 
-    # Diff is used only for positioning inline comments — review agents get full files.
-    try:
-        diff = client.get_pr_diff(repo, pr_number)
-    except Exception as exc:
-        logger.error("Could not fetch diff for %s#%d: %s", repo, pr_number, exc)
-        return jsonify({"error": str(exc)}), 500
+    # ── Phase 1: fetch diff + PR metadata in parallel ─────────────────────
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_diff  = pool.submit(client.get_pr_diff,  repo, pr_number)
+        f_info  = pool.submit(client.get_pr_info,  repo, pr_number)
+        f_files = pool.submit(client.get_pr_files, repo, pr_number)
+        try:
+            diff     = f_diff.result()
+            pr_info  = f_info.result()
+            pr_files = f_files.result()
+        except Exception as exc:
+            logger.error("GitHub API error for %s#%d: %s", repo, pr_number, exc)
+            return jsonify({"error": str(exc)}), 500
 
     if not diff.strip():
-        return jsonify({"ok": True, "message": "empty diff — nothing to review"})
+        return jsonify({"ok": True, "message": "empty diff"})
 
-    try:
-        pr_info      = client.get_pr_info(repo, pr_number)
-        pr_files     = client.get_pr_files(repo, pr_number)
-        branch       = pr_info["head"]["ref"]
-        python_files = [
-            f for f in pr_files
-            if f["filename"].endswith(".py") and f["status"] != "removed"
-        ]
-    except Exception as exc:
-        logger.error("Could not fetch PR files for %s#%d: %s", repo, pr_number, exc)
-        return jsonify({"error": str(exc)}), 500
+    branch       = pr_info["head"]["ref"]
+    python_files = [
+        f["filename"] for f in pr_files
+        if f["filename"].endswith(".py") and f["status"] != "removed"
+    ]
 
     if not python_files:
         return jsonify({"ok": True, "message": "no Python files changed"})
 
-    combined_code = ""
+    # ── Phase 2: fetch all file contents in parallel ──────────────────────
     file_contents: dict = {}
-    for file_info in python_files:
-        path = file_info["filename"]
-        try:
-            file_data = client.get_file_content(repo, path, branch)
-            file_contents[path] = file_data["content"]
-            combined_code += f"# === {path} ===\n{file_data['content']}\n\n"
-        except Exception as exc:
-            logger.warning("Could not fetch %s: %s", path, exc)
+    with ThreadPoolExecutor(max_workers=len(python_files)) as pool:
+        futures = {
+            pool.submit(client.get_file_content, repo, path, branch): path
+            for path in python_files
+        }
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                file_contents[path] = future.result()["content"]
+            except Exception as exc:
+                logger.warning("Could not fetch %s: %s", path, exc)
 
-    if not combined_code.strip():
+    if not file_contents:
         return jsonify({"ok": True, "message": "could not fetch file contents"})
 
+    combined_code = "".join(
+        f"# === {path} ===\n{content}\n\n"
+        for path, content in file_contents.items()
+    )
+
+    # ── Phase 3: run all five review agents in parallel ───────────────────
     try:
         final_state = run_review(combined_code, fix=False)
     except Exception as exc:
@@ -149,88 +153,28 @@ def _handle_pull_request():
     results      = final_state.get("results", {})
     max_severity = max((r.severity for r in results.values() if r), default=0)
 
-    # ── Build inline finding comments ─────────────────────────────────────
+    # ── Phase 4: post one unified review ──────────────────────────────────
     diff_locations   = parse_diff_locations(diff)
-    finding_comments = build_review_comments(results, diff_locations)
-
-    # ── Run fix agent as part of the pipeline (before posting anything) ───
-    # Findings → fixes → one unified review.  The author sees a single event:
-    # findings in the body, clickable suggestions inline on the diff.
-    suggestion_comments: list = []
-    fallback_fixes:      list = []
-    if max_severity > 0:
-        diff_line_sets = get_diff_line_set(diff)
-        for path, content in file_contents.items():
-            try:
-                fix_result = run_fix_from_responses(content, results)
-                if not fix_result.function_fixes:
-                    continue
-                diff_lines = diff_line_sets.get(path, set())
-                suggestions, fallback = build_suggestion_comments(
-                    fix_result.function_fixes, path, content, diff_lines,
-                )
-                suggestion_comments.extend(suggestions)
-                fallback_fixes.extend((name, src, path) for name, src in fallback)
-                logger.info("%s: %d suggestion(s), %d fallback(s)", path, len(suggestions), len(fallback))
-            except Exception as exc:
-                logger.error("Fix generation failed for %s on %s#%d: %s", path, repo, pr_number, exc)
-
-    # ── Post one unified review ────────────────────────────────────────────
-    review_body  = _build_review_body(results, suggestion_comments, fallback_fixes)
-    review_event = _review_event(max_severity)
-    all_inline   = finding_comments + suggestion_comments
+    inline_comments  = build_review_comments(results, diff_locations)
+    review_body      = format_pr_review(results)
+    review_event     = _review_event(max_severity)
 
     try:
-        client.post_pr_review(repo, pr_number, review_body, review_event, all_inline)
+        client.post_pr_review(repo, pr_number, review_body, review_event, inline_comments)
     except Exception as exc:
         logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
     logger.info(
-        "Review complete for %s#%d — severity %d, event %s, %d findings, %d suggestions",
-        repo, pr_number, max_severity, review_event,
-        len(finding_comments), len(suggestion_comments),
+        "Review complete for %s#%d — severity %d, event %s, %d inline comments",
+        repo, pr_number, max_severity, review_event, len(inline_comments),
     )
     return jsonify({
-        "ok": True,
-        "severity":    max_severity,
-        "event":       review_event,
-        "findings":    len(finding_comments),
-        "suggestions": len(suggestion_comments),
+        "ok":       True,
+        "severity": max_severity,
+        "event":    review_event,
+        "comments": len(inline_comments),
     })
-
-
-def _build_review_body(results: dict, suggestion_comments: list, fallback_fixes: list) -> str:
-    """Findings summary + inline suggestion count + fallback fixes — all in one body."""
-    body = format_pr_review(results)
-
-    if not suggestion_comments and not fallback_fixes:
-        return body
-
-    lines = [body, "", "---", ""]
-
-    if suggestion_comments:
-        n = len(suggestion_comments)
-        lines.append(
-            f"💡 **{n} fix{'es' if n != 1 else ''} suggested inline** — "
-            "click **Commit suggestion** on each fix you want to apply."
-        )
-
-    if fallback_fixes:
-        lines += ["", "**Fixes for functions outside this diff (copy-paste manually):**", ""]
-        for func_name, fixed_src, file_path in fallback_fixes:
-            lines += [
-                "<details>",
-                f"<summary><code>{func_name}()</code> in <code>{file_path}</code></summary>",
-                "",
-                "```python",
-                fixed_src.strip(),
-                "```",
-                "",
-                "</details>",
-            ]
-
-    return "\n".join(lines)
 
 
 handler = app
