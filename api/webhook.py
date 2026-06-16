@@ -27,7 +27,8 @@ from flask import Flask, jsonify, request
 
 from review import run_fix_from_responses, run_review_multifile
 from schemas.response import AgentResponse
-from utils.diff_parser import get_diff_line_set, parse_diff_locations
+from utils.code_splitter import split_code
+from utils.diff_parser import extract_function_name, get_diff_line_set, parse_diff_locations
 from utils.github_client import (
     GitHubClient,
     _review_event,
@@ -318,7 +319,35 @@ def _handle_issue_comment():
 
     for path, content in file_contents.items():
         try:
-            fix_result = run_fix_from_responses(content, results)
+            # Filter merged findings to only those relevant to this file.
+            # Findings that mention functions from other files would otherwise
+            # be broadcast to all functions in this file by _map_findings().
+            file_func_names = {
+                s.name for s in split_code(content)
+                if s.section_type in ("function", "class")
+            }
+            file_results: dict = {}
+            for agent_name, resp in results.items():
+                if not resp or not resp.findings:
+                    continue
+                relevant = [
+                    f for f in resp.findings
+                    if (fn := extract_function_name(f)) is None or fn in file_func_names
+                ]
+                if not relevant:
+                    continue
+                file_results[agent_name] = AgentResponse(
+                    reasoning=resp.reasoning,
+                    findings=relevant,
+                    severity=resp.severity,
+                    confidence=resp.confidence,
+                    locations=[loc for loc in (resp.locations or []) if loc in file_func_names],
+                )
+
+            if not file_results:
+                continue
+
+            fix_result = run_fix_from_responses(content, file_results)
             if not fix_result.function_fixes:
                 continue
             diff_lines = diff_line_sets.get(path, set())
