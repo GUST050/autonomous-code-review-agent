@@ -194,10 +194,10 @@ class TestFormatPrReview:
         recovered = extract_findings_from_review(body)
         assert recovered["Injection Expert"]["findings"] == ["login(): SQL injection"]
 
-    def test_fix_hint_shown_when_issues_found(self):
-        """Review body should include 'fix' hint when issues are present."""
+    def test_findings_shown_when_issues_found(self):
+        """Review body should include findings section when issues are present."""
         comment = format_pr_review({"Injection Expert": self._result(95, ["x"])})
-        assert "fix" in comment.lower()
+        assert "injection expert" in comment.lower()
 
     def test_no_embedded_findings_when_all_clean(self):
         """Clean reviews still embed findings (all severities 0) — used to detect no-issues."""

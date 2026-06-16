@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from schemas.fix_response import FixResponse
-from config import ModelConfig, CLAUDE_HAIKU, CLAUDE_SONNET, GROK_MINI, GPT4O_MINI
+from config import ModelConfig, CLAUDE_HAIKU, CLAUDE_SONNET, GPT4O_MINI
 from main import _save_output, _prompt_accept_fixes, _build_llm
 
 
@@ -93,15 +93,6 @@ class TestBuildLlm:
             max_tokens=CLAUDE_HAIKU.max_tokens,
         )
 
-    def test_xai_config_returns_chat_xai(self):
-        with patch("review.ChatXAI") as mock:
-            _build_llm(GROK_MINI)
-        mock.assert_called_once_with(
-            model=GROK_MINI.model,
-            temperature=GROK_MINI.temperature,
-            max_tokens=GROK_MINI.max_tokens,
-        )
-
     def test_openai_config_returns_chat_openai(self):
         with patch("review.ChatOpenAI") as mock:
             _build_llm(GPT4O_MINI)
@@ -127,15 +118,12 @@ class TestBuildLlm:
 
 class TestModelConfigProvider:
     def test_all_configs_have_provider(self):
-        for cfg in [CLAUDE_HAIKU, CLAUDE_SONNET, GROK_MINI, GPT4O_MINI]:
-            assert cfg.provider in ("anthropic", "xai", "openai")
+        for cfg in [CLAUDE_HAIKU, CLAUDE_SONNET, GPT4O_MINI]:
+            assert cfg.provider in ("anthropic", "openai")
 
     def test_claude_configs_are_anthropic(self):
         assert CLAUDE_HAIKU.provider == "anthropic"
         assert CLAUDE_SONNET.provider == "anthropic"
-
-    def test_grok_is_xai(self):
-        assert GROK_MINI.provider == "xai"
 
     def test_gpt_is_openai(self):
         assert GPT4O_MINI.provider == "openai"
