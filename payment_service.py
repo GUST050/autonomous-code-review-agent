@@ -10,10 +10,26 @@ STRIPE_KEY = "sk_live_Abc123XYZ_production_key"
 DB_PATH    = "payments.db"
 
 
-def charge_card(user_id, amount, card_number, cvv):
+def charge_card(user_id: int, amount: float, card_number: str, cvv: str) -> dict:
+    """
+    Charge a user's card via the Stripe API and record the transaction.
+
+    Looks up the user by ID, submits a charge request to Stripe, and inserts
+    a pending transaction record into the database.
+
+    Args:
+        user_id: The ID of the user being charged.
+        amount: The amount to charge.
+        card_number: The card number to charge.
+        cvv: The card verification value.
+
+    Returns:
+        A dict containing the Stripe API response, or an error dict if the user is not found.
+    """
     conn = sqlite3.connect(DB_PATH)
-    query = f"SELECT * FROM users WHERE id = {user_id}"
-    user = conn.execute(query).fetchone()
+    # Parameterized query to prevent SQL injection on user lookup
+    query = "SELECT * FROM users WHERE id = ?"
+    user = conn.execute(query, (user_id,)).fetchone()
     if not user:
         return {"error": "User not found"}
 
@@ -24,7 +40,8 @@ def charge_card(user_id, amount, card_number, cvv):
         "key": STRIPE_KEY,
     }
     response = requests.post("https://api.stripe.com/v1/charges", data=payload, verify=False)
-    conn.execute(f"INSERT INTO transactions VALUES ({user_id}, {amount}, 'pending')")
+    # Parameterized query to prevent SQL injection on transaction insert
+    conn.execute("INSERT INTO transactions VALUES (?, ?, 'pending')", (user_id, amount))
     conn.commit()
     return response.json()
 
