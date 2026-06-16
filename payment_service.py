@@ -66,15 +66,36 @@ def get_user_transactions(user_id, start_date, end_date):
     return rows
 
 
-def create_session(username, password):
-    pw_hash = hashlib.md5(password.encode()).hexdigest()
+def create_session(username: str, password: str) -> dict | None:
+    """Authenticate a user and create a session token.
+
+    Looks up the user by username and verifies the provided password against
+    the stored SHA-256 hash. If authentication succeeds, generates a
+    cryptographically secure random session token and returns it alongside
+    the user's ID.
+
+    Args:
+        username: The username to authenticate.
+        password: The plaintext password to verify.
+
+    Returns:
+        A dict with 'token' and 'user_id' keys on success, or None if
+        authentication fails.
+    """
+    # Hash the incoming password with SHA-256 for comparison against stored hash
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+
     conn = sqlite3.connect(DB_PATH)
     user = conn.execute(
-        f"SELECT id FROM users WHERE username='{username}' AND password='{pw_hash}'"
+        "SELECT id FROM users WHERE username = ? AND password = ?",
+        (username, pw_hash),
     ).fetchone()
+
     if not user:
         return None
-    session_token = hashlib.md5(f"{username}{pw_hash}".encode()).hexdigest()
+
+    # Generate a cryptographically secure random session token
+    session_token = secrets.token_hex(32)
     return {"token": session_token, "user_id": user[0]}
 
 
