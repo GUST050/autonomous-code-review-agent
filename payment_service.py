@@ -99,8 +99,33 @@ def create_session(username: str, password: str) -> dict | None:
     return {"token": session_token, "user_id": user[0]}
 
 
-def get_all_user_data(admin_token):
-    if admin_token == "admin_secret_2024":
-        conn = sqlite3.connect(DB_PATH)
-        return conn.execute("SELECT * FROM users").fetchall()
-    return []
+def get_all_user_data(admin_token: str, limit: int = 100, offset: int = 0) -> list:
+    """
+    Retrieve a paginated list of all user records from the database.
+
+    Compares the provided admin token against a securely stored hash before
+    granting access. Returns an empty list if the token is invalid.
+
+    Args:
+        admin_token: The plaintext admin token to authenticate the request.
+        limit: Maximum number of records to return (default 100).
+        offset: Number of records to skip for pagination (default 0).
+
+    Returns:
+        A list of user row tuples, or an empty list if authentication fails.
+    """
+    # Compare against a hashed token rather than a plaintext secret.
+    # NOTE: ADMIN_TOKEN_HASH must be set as an environment variable containing
+    # the SHA-256 hex digest of the real admin token (bcrypt/argon2 preferred
+    # for passwords; SHA-256 used here as a minimum improvement over plaintext).
+    import os
+    expected_hash = os.environ.get("ADMIN_TOKEN_HASH", "")
+    provided_hash = hashlib.sha256(admin_token.encode()).hexdigest()
+    if not expected_hash or provided_hash != expected_hash:
+        return []
+
+    conn = sqlite3.connect(DB_PATH)
+    # Use parameterized LIMIT/OFFSET to avoid unbounded full-table scan
+    return conn.execute(
+        "SELECT * FROM users LIMIT ? OFFSET ?", (limit, offset)
+    ).fetchall()
