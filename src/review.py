@@ -125,6 +125,103 @@ def run_review_parallel(code: str) -> Dict[str, Optional[AgentResponse]]:
     return results
 
 
+def run_review_multifile(file_contents: Dict[str, str]) -> Dict[str, Optional[AgentResponse]]:
+    """
+    Run all five review agents on every file independently, all in parallel.
+
+    Instead of concatenating files into one large blob (which causes timeouts on
+    larger PRs), each (agent, file) pair is submitted as a separate task to a
+    single ThreadPoolExecutor.  The total wall-clock time is still bounded by
+    LLM_TIMEOUT + 0.5s regardless of how many files the PR touches, because all
+    tasks run simultaneously.
+
+    Results for each agent are merged across files: findings and locations are
+    combined; severity and confidence take the maximum across files.
+    """
+    from concurrent.futures import wait as _wait
+    from config import LLM_TIMEOUT
+
+    if not file_contents:
+        return {}
+
+    cfg = AGENT_CONFIGS
+
+    def _make_agents() -> list:
+        return [
+            InjectionAgent(   llm=_build_llm(cfg["Injection Expert"])),
+            AuthAgent(        llm=_build_llm(cfg["Auth Expert"])),
+            SecretsAgent(     llm=_build_llm(cfg["Secrets Expert"])),
+            PerformanceAgent( llm=_build_llm(cfg["Performance Expert"])),
+            QualityAgent(     llm=_build_llm(cfg["Code Quality Expert"])),
+        ]
+
+    agent_names = ["Injection Expert", "Auth Expert", "Secrets Expert",
+                   "Performance Expert", "Code Quality Expert"]
+
+    # One fresh agent set per file keeps per-call state isolated.
+    pool = ThreadPoolExecutor(max_workers=len(agent_names) * len(file_contents))
+    future_to_key: dict = {}
+
+    for path, content in file_contents.items():
+        file_agents = _make_agents()
+        for agent in file_agents:
+            code = f"# === {path} ===\n{content}\n"
+            future = pool.submit(agent.review_code, code)
+            future_to_key[future] = (agent.name, path)
+
+    done, not_done = _wait(future_to_key.keys(), timeout=LLM_TIMEOUT + 0.5)
+    pool.shutdown(wait=False)
+
+    if not_done:
+        slow = [f"{future_to_key[f][0]}@{future_to_key[f][1]}" for f in not_done]
+        logger.warning("Abandoned %d slow tasks after %ds: %s", len(not_done), LLM_TIMEOUT, slow)
+
+    # Collect completed results grouped by agent name
+    per_agent: dict = {name: [] for name in agent_names}
+    for future in done:
+        agent_name, path = future_to_key[future]
+        try:
+            resp = future.result()
+        except Exception as exc:
+            logger.error("[%s] failed on %s: %s", agent_name, path, exc)
+            resp = AgentResponse(reasoning=f"Failed: {exc}", findings=[], severity=0, confidence=0)
+        per_agent[agent_name].append(resp)
+
+    # Merge per-file responses into one AgentResponse per agent
+    empty = AgentResponse(reasoning="Timed out", findings=[], severity=0, confidence=0)
+    results: Dict[str, Optional[AgentResponse]] = {}
+
+    for name in agent_names:
+        file_resps = [r for r in per_agent[name] if r is not None]
+        if not file_resps:
+            results[name] = empty
+            continue
+
+        findings: list = []
+        locations: list = []
+        max_sev = 0
+        max_conf = 0
+        best_reasoning = "No issues found in this domain."
+
+        for resp in file_resps:
+            if resp.severity > max_sev:
+                max_sev = resp.severity
+                best_reasoning = resp.reasoning
+            max_conf = max(max_conf, resp.confidence)
+            findings.extend(resp.findings)
+            locations.extend(resp.locations)
+
+        results[name] = AgentResponse(
+            reasoning=best_reasoning,
+            findings=findings,
+            severity=max_sev,
+            confidence=max_conf,
+            locations=list(dict.fromkeys(locations)),  # deduplicate, preserve order
+        )
+
+    return results
+
+
 def run_fix_from_responses(code: str, results: Dict[str, Optional[AgentResponse]]) -> FixResponse:
     """Run the fix agent directly with AgentResponse objects from a just-completed review."""
     cfg = AGENT_CONFIGS

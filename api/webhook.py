@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
-from review import run_fix_from_responses, run_review_parallel
+from review import run_fix_from_responses, run_review_multifile
 from schemas.response import AgentResponse
 from utils.diff_parser import get_diff_line_set, parse_diff_locations
 from utils.github_client import (
@@ -144,14 +144,9 @@ def _handle_pull_request():
     if not file_contents:
         return jsonify({"ok": True, "message": "could not fetch file contents"})
 
-    combined_code = "".join(
-        f"# === {path} ===\n{content}\n\n"
-        for path, content in file_contents.items()
-    )
-
     # ── Phase 3: run all five review agents in parallel ───────────────────
     try:
-        results = run_review_parallel(combined_code)
+        results = run_review_multifile(file_contents)
     except Exception as exc:
         logger.error("Review failed for %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
