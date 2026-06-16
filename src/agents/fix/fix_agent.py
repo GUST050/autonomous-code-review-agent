@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel as _BaseChatModel
 
-from config import APPROVAL_THRESHOLD, FIX_MAX_WORKERS
+from config import APPROVAL_THRESHOLD, FIX_MAX_WORKERS, FIX_TIMEOUT
 from schemas.response import AgentResponse
 from schemas.fix_response import FixResponse
 from schemas.function_fix_response import FunctionFixResponse
@@ -278,6 +278,7 @@ class FixGeneratorAgent(BaseAgent):
             response_schema=FunctionFixResponse,
             _llm=llm,
             _system_prompt=_FUNCTION_SYSTEM_PROMPT,
+            _timeout=FIX_TIMEOUT,
         )
 
     # ── Private: header fix ───────────────────────────────────────────────────
@@ -313,6 +314,7 @@ class FixGeneratorAgent(BaseAgent):
             response_schema=FunctionFixResponse,
             _llm=llm,
             _system_prompt=_HEADER_SYSTEM_PROMPT,
+            _timeout=FIX_TIMEOUT,
         )
 
     # ── Private: findings mapping ─────────────────────────────────────────────

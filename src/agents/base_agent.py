@@ -77,6 +77,7 @@ class BaseAgent(ABC):
         response_schema: Optional[Type[BaseModel]] = None,
         _llm: Optional[BaseChatModel] = None,
         _system_prompt: Optional[str] = None,
+        _timeout: Optional[int] = None,
     ) -> Any:
         schema = response_schema or AgentResponse
         using_default_prompt = _system_prompt is None
@@ -105,11 +106,12 @@ class BaseAgent(ABC):
         structured_llm = effective_llm.with_structured_output(schema, method="function_calling")
         last_error: Exception = Exception("max_retries must be >= 1")
 
+        timeout = _timeout if _timeout is not None else LLM_TIMEOUT
         for attempt in range(1, max(max_retries, 1) + 1):
             try:
                 return _call_with_timeout(
                     lambda: structured_llm.invoke(full_prompt, config={"callbacks": callbacks}),
-                    LLM_TIMEOUT,
+                    timeout,
                 )
             except Exception as exc:
                 last_error = exc
