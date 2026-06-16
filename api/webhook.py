@@ -25,12 +25,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
-from review import run_review
-from utils.diff_parser import parse_diff_locations
+from review import run_fix_from_responses, run_review
+from utils.diff_parser import get_diff_line_set, parse_diff_locations
 from utils.github_client import (
     GitHubClient,
     _review_event,
     build_review_comments,
+    build_suggestion_comments,
     format_pr_review,
 )
 
@@ -153,28 +154,80 @@ def _handle_pull_request():
     results      = final_state.get("results", {})
     max_severity = max((r.severity for r in results.values() if r), default=0)
 
-    # ── Phase 4: post one unified review ──────────────────────────────────
-    diff_locations   = parse_diff_locations(diff)
-    inline_comments  = build_review_comments(results, diff_locations)
-    review_body      = format_pr_review(results)
-    review_event     = _review_event(max_severity)
+    # ── Phase 4: run fix agent and build all inline comments ─────────────
+    diff_locations      = parse_diff_locations(diff)
+    finding_comments    = build_review_comments(results, diff_locations)
+    suggestion_comments: list = []
+    fallback_fixes:      list = []
+
+    if max_severity > 0:
+        diff_line_sets = get_diff_line_set(diff)
+        for path, content in file_contents.items():
+            try:
+                fix_result = run_fix_from_responses(content, results)
+                if not fix_result.function_fixes:
+                    continue
+                diff_lines = diff_line_sets.get(path, set())
+                suggestions, fallback = build_suggestion_comments(
+                    fix_result.function_fixes, path, content, diff_lines,
+                )
+                suggestion_comments.extend(suggestions)
+                fallback_fixes.extend((name, src, path) for name, src in fallback)
+            except Exception as exc:
+                logger.error("Fix failed for %s on %s#%d: %s", path, repo, pr_number, exc)
+
+    # ── Phase 5: post one unified review ──────────────────────────────────
+    review_body  = _build_review_body(results, suggestion_comments, fallback_fixes)
+    review_event = _review_event(max_severity)
+    all_inline   = finding_comments + suggestion_comments
 
     try:
-        client.post_pr_review(repo, pr_number, review_body, review_event, inline_comments)
+        client.post_pr_review(repo, pr_number, review_body, review_event, all_inline)
     except Exception as exc:
         logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
     logger.info(
-        "Review complete for %s#%d — severity %d, event %s, %d inline comments",
-        repo, pr_number, max_severity, review_event, len(inline_comments),
+        "Review complete for %s#%d — severity %d, event %s, %d findings, %d suggestions",
+        repo, pr_number, max_severity, review_event,
+        len(finding_comments), len(suggestion_comments),
     )
     return jsonify({
-        "ok":       True,
-        "severity": max_severity,
-        "event":    review_event,
-        "comments": len(inline_comments),
+        "ok":         True,
+        "severity":   max_severity,
+        "event":      review_event,
+        "findings":   len(finding_comments),
+        "suggestions": len(suggestion_comments),
     })
+
+
+def _build_review_body(results: dict, suggestion_comments: list, fallback_fixes: list) -> str:
+    body = format_pr_review(results)
+
+    if not suggestion_comments and not fallback_fixes:
+        return body
+
+    lines = [body, "", "---", ""]
+    if suggestion_comments:
+        n = len(suggestion_comments)
+        lines.append(
+            f"💡 **{n} fix{'es' if n != 1 else ''} suggested inline** — "
+            "click **Commit suggestion** on each fix you want to apply."
+        )
+    if fallback_fixes:
+        lines += ["", "**Fixes outside this diff (copy-paste manually):**", ""]
+        for func_name, fixed_src, file_path in fallback_fixes:
+            lines += [
+                "<details>",
+                f"<summary><code>{func_name}()</code> in <code>{file_path}</code></summary>",
+                "",
+                "```python",
+                fixed_src.strip(),
+                "```",
+                "",
+                "</details>",
+            ]
+    return "\n".join(lines)
 
 
 handler = app
