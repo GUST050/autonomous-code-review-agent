@@ -16,9 +16,9 @@ class AgentResponse(BaseModel):
     findings: List[str] = Field(
         description=(
             "Specific issues found — up to 10 items. "
-            "Each entry MUST start with the affected function name followed by a colon, "
-            "then describe the vulnerability and its impact. "
-            "Example: 'login(): SQL injection via f-string in execute() — attacker can dump all user passwords'. "
+            "Each entry MUST use the format: '[SEVERITY] function(): issue — concrete impact'. "
+            "SEVERITY must be one of: CRITICAL, HIGH, MEDIUM, LOW. "
+            "Example: '[HIGH] login(): SQL injection via f-string — attacker can dump all user passwords'. "
             "Empty list if no issues found."
         )
     )

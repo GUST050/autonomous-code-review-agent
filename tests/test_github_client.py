@@ -193,6 +193,31 @@ class TestBuildReviewComments:
         locs = {"login": self._loc()}
         assert build_review_comments(results, locs) == []
 
+    def test_finding_with_no_function_name_falls_back_to_locations_field(self):
+        # Finding text has no parseable function name, but result.locations says charge_card
+        results = {"Secrets Expert": self._result(
+            60,
+            ["[HIGH] STRIPE_KEY: hardcoded API key — exposed in source"],
+            locations=["charge_card"],
+        )}
+        locs = {"charge_card": self._loc(path="payment.py", line=13)}
+        comments = build_review_comments(results, locs)
+        assert len(comments) == 1
+        assert comments[0]["path"] == "payment.py"
+        assert comments[0]["line"] == 13
+
+    def test_finding_with_wrong_function_falls_back_to_locations_field(self):
+        # Function name in finding text ("unknown") isn't in diff but locations has a valid one
+        results = {"Auth Expert": self._result(
+            70,
+            ["[HIGH] unknown(): missing auth"],
+            locations=["login"],
+        )}
+        locs = {"login": self._loc(line=5)}
+        comments = build_review_comments(results, locs)
+        assert len(comments) == 1
+        assert comments[0]["line"] == 5
+
     def test_critical_finding_has_emoji_prefix(self):
         results = {"Injection Expert": self._result(95, ["[CRITICAL] login(): RCE via eval()"])}
         locs = {"login": self._loc()}

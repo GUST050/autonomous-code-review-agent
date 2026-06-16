@@ -184,7 +184,14 @@ def _handle_pull_request():
 
 
 def _build_review_body(results: dict, suggestion_comments: list, fallback_fixes: list) -> str:
-    body = format_pr_review(results)
+    if results:
+        body = format_pr_review(results)
+    else:
+        n = len(suggestion_comments) + len(fallback_fixes)
+        body = (
+            "## 🔧 Fix Suggestions\n\n"
+            f"Found **{n} fix{'es' if n != 1 else ''}** for the issues in the code review above."
+        )
 
     if not suggestion_comments and not fallback_fixes:
         return body

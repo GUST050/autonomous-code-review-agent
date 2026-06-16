@@ -30,10 +30,13 @@ def build_review_comments(
     """
     Build the list of inline review comment dicts for the GitHub Reviews API.
 
-    For each finding whose function can be located in the diff, create one
-    inline comment placed on the first added line of that function.  Findings
-    with no matching diff location are omitted here — they remain visible in
-    the review body summary.
+    For each finding, the best diff location is chosen in order:
+      1. Function name parsed directly from the finding string (e.g. "func():").
+      2. First location from result.locations that exists in the diff — catches
+         findings where the agent didn't embed the function name in the text.
+
+    Findings with no resolvable diff location are omitted — they remain visible
+    in the review body summary.
 
     Returns a list ready to pass as the 'comments' field of POST /pulls/reviews.
     Each dict contains: path, line, side ("RIGHT"), body.
@@ -45,12 +48,23 @@ def build_review_comments(
         if not result or not result.findings:
             continue
 
-        for finding in result.findings:
-            func_name = extract_function_name(finding)
-            if not func_name:
-                continue
+        # Pre-resolve which of this agent's declared locations exist in the diff.
+        # Used as fallback when the finding text doesn't embed a function name.
+        agent_diff_locs = [
+            diff_locations[name]
+            for name in (result.locations or [])
+            if name in diff_locations
+        ]
 
-            loc = diff_locations.get(func_name)
+        for finding in result.findings:
+            # Primary: parse function name from the finding string itself.
+            func_name = extract_function_name(finding)
+            loc = diff_locations.get(func_name) if func_name else None
+
+            # Fallback: use first location declared by the agent.
+            if loc is None and agent_diff_locs:
+                loc = agent_diff_locs[0]
+
             if not loc:
                 continue
 
