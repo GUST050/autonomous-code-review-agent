@@ -30,10 +30,21 @@ def charge_card(user_id, amount, card_number, cvv):
 
 
 def get_user_transactions(user_id, start_date, end_date):
+    """Retrieve all transactions for a given user within a specified date range.
+
+    Args:
+        user_id: The ID of the user whose transactions are being fetched.
+        start_date: The start of the date range (inclusive).
+        end_date: The end of the date range (inclusive).
+
+    Returns:
+        A list of rows matching the query criteria.
+    """
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        f"SELECT * FROM transactions WHERE user_id = '{user_id}' "
-        f"AND date BETWEEN '{start_date}' AND '{end_date}'"
+        "SELECT * FROM transactions WHERE user_id = ? "
+        "AND date BETWEEN ? AND ?",
+        (user_id, start_date, end_date)
     ).fetchall()
     return rows
 
