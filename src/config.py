@@ -73,8 +73,8 @@ FIX_GENERATOR_FAST = CLAUDE_HAIKU
 # ── System settings ───────────────────────────────────────────────────────────
 
 APPROVAL_THRESHOLD: int = 80  # Severity >= this triggers human approval
-MAX_RETRIES: int = 4          # LLM call retries (includes rate-limit retries)
-LLM_TIMEOUT: int = 60         # Seconds before a single LLM call is considered hung
+MAX_RETRIES: int = 2          # LLM call retries (rate-limit only — timeout exits immediately)
+LLM_TIMEOUT: int = 7          # Seconds before a single LLM call is considered hung
 FIX_MAX_WORKERS: int = 4      # Max parallel LLM calls in fix generation
 
 # Shared severity scale — used in every agent system prompt

@@ -80,13 +80,7 @@ class BaseAgent(ABC):
         using_default_prompt = _system_prompt is None
         sys_prompt = self.get_system_prompt() if using_default_prompt else _system_prompt
 
-        # Review agents receive a git diff. Tell them which lines to focus on.
-        # Fix agents always supply _system_prompt, so this block is skipped for them.
-        diff_note = (
-            "\nDIFF REVIEW RULES: The code below may be a git diff. "
-            "ONLY flag issues in lines starting with '+' (newly added code). "
-            "Lines starting with '-' are removed — ignore them completely. "
-            "Lines with no prefix are unchanged context — use for understanding only.\n"
+        confidence_note = (
             "\nCONFIDENCE RULE: Only report findings where you are 80%+ confident an issue "
             "actually exists. A false positive wastes developer time and erodes trust in the "
             "tool. When in doubt, omit the finding entirely.\n"
@@ -94,7 +88,7 @@ class BaseAgent(ABC):
         )
 
         full_prompt = (
-            f"{sys_prompt}{diff_note}\n\n"
+            f"{sys_prompt}{confidence_note}\n\n"
             f"{user_prompt}\n\n"
             f"Output ONLY the structured fields — no XML tags, no markdown, no extra text.\n"
             f"Each finding MUST use this format: "
@@ -121,9 +115,10 @@ class BaseAgent(ABC):
                     break
                 if isinstance(exc, TimeoutError):
                     logger.warning(
-                        "[%s] Attempt %d timed out after %ds — retrying...",
-                        self.name, attempt, LLM_TIMEOUT,
+                        "[%s] Timed out after %ds — not retrying",
+                        self.name, LLM_TIMEOUT,
                     )
+                    break
                 elif _is_rate_limit(exc):
                     delay = min(
                         _RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 1),
