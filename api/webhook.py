@@ -116,7 +116,7 @@ def _handle_pull_request():
         except Exception as exc:
             logger.warning("Could not check commit message: %s — proceeding with review", exc)
 
-    # Fetch PR diff (review agents only see what changed, not the whole repo)
+    # Fetch PR diff — used for positioning inline comments, not for the review itself
     try:
         diff = client.get_pr_diff(repo, pr_number)
     except Exception as exc:
@@ -126,9 +126,41 @@ def _handle_pull_request():
     if not diff.strip():
         return jsonify({"ok": True, "message": "empty diff — nothing to review"})
 
-    # Run all five review agents (no fix generation yet — that's triggered by 'fix' comment)
+    # Fetch full content of every changed Python file from the PR branch.
+    # Review agents see the whole file so they find pre-existing issues too,
+    # not just lines that happen to appear in the diff.
     try:
-        final_state = run_review(diff, fix=False)
+        pr_info      = client.get_pr_info(repo, pr_number)
+        pr_files     = client.get_pr_files(repo, pr_number)
+        branch       = pr_info["head"]["ref"]
+        python_files = [
+            f for f in pr_files
+            if f["filename"].endswith(".py") and f["status"] != "removed"
+        ]
+    except Exception as exc:
+        logger.error("Could not fetch PR files for %s#%d: %s", repo, pr_number, exc)
+        return jsonify({"error": str(exc)}), 500
+
+    if not python_files:
+        return jsonify({"ok": True, "message": "no Python files changed"})
+
+    # Combine all changed Python files into one review pass
+    combined_code = ""
+    file_contents: dict = {}
+    for file_info in python_files:
+        path = file_info["filename"]
+        try:
+            file_data = client.get_file_content(repo, path, branch)
+            file_contents[path] = file_data["content"]
+            combined_code += f"# === {path} ===\n{file_data['content']}\n\n"
+        except Exception as exc:
+            logger.warning("Could not fetch %s: %s", path, exc)
+
+    if not combined_code.strip():
+        return jsonify({"ok": True, "message": "could not fetch file contents"})
+
+    try:
+        final_state = run_review(combined_code, fix=False)
     except Exception as exc:
         logger.error("Review failed for %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
@@ -136,7 +168,7 @@ def _handle_pull_request():
     results    = final_state.get("results", {})
     fix_result = final_state.get("fix_result")
 
-    # Build inline comments — each finding placed on the relevant line in the diff
+    # Inline comments placed on diff lines where the affected function appears
     diff_locations   = parse_diff_locations(diff)
     inline_comments  = build_review_comments(results, diff_locations)
 
@@ -150,10 +182,12 @@ def _handle_pull_request():
         logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
-    # Automatically post fix suggestions when issues are found — no /fix command needed
+    # Automatically post fix suggestions when issues are found
     suggestions_posted = 0
     if max_severity > 0:
-        suggestions_posted = _post_fix_suggestions(client, repo, pr_number, results, diff)
+        suggestions_posted = _post_fix_suggestions(
+            client, repo, pr_number, results, diff, file_contents,
+        )
 
     logger.info(
         "Review complete for %s#%d — severity %d, event %s, suggestions %d",
@@ -175,42 +209,30 @@ def _post_fix_suggestions(
     pr_number: int,
     results: dict,
     diff: str,
+    file_contents: dict,
 ) -> int:
     """
     Run the fix agent on all changed Python files and post GitHub Suggestions.
     Returns the number of inline suggestions posted.
+    file_contents: {path: content} — already fetched by the caller.
     """
-    try:
-        pr_files = client.get_pr_files(repo, pr_number)
-        pr_info  = client.get_pr_info(repo, pr_number)
-        branch   = pr_info["head"]["ref"]
-    except Exception as exc:
-        logger.warning("Could not get PR files for auto-suggestions on %s#%d: %s", repo, pr_number, exc)
-        return 0
-
-    python_files = [
-        f for f in pr_files
-        if f["filename"].endswith(".py") and f["status"] != "removed"
-    ]
-    if not python_files:
+    if not file_contents:
         return 0
 
     diff_line_sets          = get_diff_line_set(diff)
     all_suggestion_comments: list = []
     all_fallback:            list = []
 
-    for file_info in python_files:
-        path = file_info["filename"]
+    for path, content in file_contents.items():
         try:
-            file_data  = client.get_file_content(repo, path, branch)
-            fix_result = run_fix_from_responses(file_data["content"], results)
+            fix_result = run_fix_from_responses(content, results)
 
             if not fix_result.function_fixes:
                 continue
 
             diff_lines = diff_line_sets.get(path, set())
             suggestions, fallback = build_suggestion_comments(
-                fix_result.function_fixes, path, file_data["content"], diff_lines,
+                fix_result.function_fixes, path, content, diff_lines,
             )
             all_suggestion_comments.extend(suggestions)
             all_fallback.extend((name, src, path) for name, src in fallback)
