@@ -180,20 +180,23 @@ class TestCallWithTimeout:
 
 
 class TestTimeoutRetry:
-    def test_timeout_triggers_retry_without_sleep(self):
-        """TimeoutError must retry immediately — no backoff sleep."""
+    def test_timeout_exits_immediately_without_retry(self):
+        """TimeoutError must exit immediately — no retry, no backoff."""
         agent = _make_agent()
         success_value = MagicMock()
 
         with patch("agents.base_agent._call_with_timeout") as mock_call:
-            mock_call.side_effect = [TimeoutError("timed out after 60s"), success_value]
+            mock_call.side_effect = [TimeoutError("timed out after 7s"), success_value]
             with patch("agents.base_agent.time.sleep") as mock_sleep:
                 result = agent.invoke("hello", max_retries=3)
 
-        assert result is success_value
+        # second side_effect never reached — timeout causes immediate exit
+        assert mock_call.call_count == 1
+        assert result.severity == 0
+        assert result.findings == []
         mock_sleep.assert_not_called()
 
-    def test_timeout_exhausts_retries_and_returns_error_response(self):
+    def test_timeout_returns_empty_response(self):
         agent = _make_agent()
 
         with patch("agents.base_agent._call_with_timeout", side_effect=TimeoutError("timed out")):
@@ -205,10 +208,8 @@ class TestTimeoutRetry:
 
     def test_timeout_warning_logged(self):
         agent = _make_agent()
-        success_value = MagicMock()
 
-        with patch("agents.base_agent._call_with_timeout") as mock_call:
-            mock_call.side_effect = [TimeoutError("timed out after 60s"), success_value]
+        with patch("agents.base_agent._call_with_timeout", side_effect=TimeoutError("timed out after 7s")):
             with patch("agents.base_agent.logger") as mock_logger:
                 agent.invoke("hello", max_retries=3)
 

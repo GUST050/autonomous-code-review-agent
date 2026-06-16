@@ -159,50 +159,29 @@ def _handle_pull_request():
     results      = final_state.get("results", {})
     max_severity = max((r.severity for r in results.values() if r), default=0)
 
-    # ── Phase 4: run fix agent and build all inline comments ─────────────
-    diff_locations      = parse_diff_locations(diff)
-    finding_comments    = build_review_comments(results, diff_locations)
-    suggestion_comments: list = []
-    fallback_fixes:      list = []
-
-    if max_severity > 0:
-        diff_line_sets = get_diff_line_set(diff)
-        for path, content in file_contents.items():
-            try:
-                fix_result = run_fix_from_responses(content, results)
-                if not fix_result.function_fixes:
-                    continue
-                diff_lines = diff_line_sets.get(path, set())
-                suggestions, fallback = build_suggestion_comments(
-                    fix_result.function_fixes, path, content, diff_lines,
-                )
-                suggestion_comments.extend(suggestions)
-                fallback_fixes.extend((name, src, path) for name, src in fallback)
-            except Exception as exc:
-                logger.error("Fix failed for %s on %s#%d: %s", path, repo, pr_number, exc)
+    # ── Phase 4: build inline finding comments ────────────────────────────
+    diff_locations   = parse_diff_locations(diff)
+    finding_comments = build_review_comments(results, diff_locations)
 
     # ── Phase 5: post one unified review ──────────────────────────────────
-    review_body  = _build_review_body(results, suggestion_comments, fallback_fixes)
+    review_body  = format_pr_review(results)
     review_event = _review_event(max_severity)
-    all_inline   = finding_comments + suggestion_comments
 
     try:
-        client.post_pr_review(repo, pr_number, review_body, review_event, all_inline)
+        client.post_pr_review(repo, pr_number, review_body, review_event, finding_comments)
     except Exception as exc:
         logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
     logger.info(
-        "Review complete for %s#%d — severity %d, event %s, %d findings, %d suggestions",
-        repo, pr_number, max_severity, review_event,
-        len(finding_comments), len(suggestion_comments),
+        "Review complete for %s#%d — severity %d, event %s, %d findings",
+        repo, pr_number, max_severity, review_event, len(finding_comments),
     )
     return jsonify({
         "ok":         True,
         "severity":   max_severity,
         "event":      review_event,
         "findings":   len(finding_comments),
-        "suggestions": len(suggestion_comments),
     })
 
 
