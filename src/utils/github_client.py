@@ -317,12 +317,6 @@ def format_pr_review(
             lines.append(f"| {agent_name} | {label} | {emoji} |")
 
     # ── Hint for fix command + hidden findings payload ────────────────────
-    if max_severity > 0:
-        lines += [
-            "",
-            "> 💬 Comment **`/fix`** on this PR to let the agent commit fixes directly to the branch.",
-        ]
-
     lines += [
         "",
         "*Powered by [Autonomous Code Review Agent](https://github.com/GUST050/autonomous-code-review-agent)*",

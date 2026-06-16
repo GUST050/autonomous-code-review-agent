@@ -73,6 +73,16 @@ def run_review(code: str, fix: bool = False) -> dict:
     return ReviewRunner(graph).run(code, fix=fix)
 
 
+def run_fix_from_responses(code: str, results: Dict[str, Optional[AgentResponse]]) -> FixResponse:
+    """Run the fix agent directly with AgentResponse objects from a just-completed review."""
+    cfg = AGENT_CONFIGS
+    fix_agent = FixGeneratorAgent(
+        llm=_build_llm(cfg["Fix Generator"]),
+        fast_llm=_build_llm(FIX_GENERATOR_FAST),
+    )
+    return fix_agent.generate_fixes(code, results)
+
+
 def run_fix(code: str, findings_data: Dict[str, dict]) -> FixResponse:
     """
     Run only the fix agent using pre-computed review findings.

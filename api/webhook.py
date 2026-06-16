@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
-from review import run_fix, run_review
+from review import run_fix, run_fix_from_responses, run_review
 from utils.diff_parser import get_diff_line_set, parse_diff_locations
 from utils.github_client import (
     GitHubClient,
@@ -150,11 +150,108 @@ def _handle_pull_request():
         logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
+    # Automatically post fix suggestions when issues are found — no /fix command needed
+    suggestions_posted = 0
+    if max_severity > 0:
+        suggestions_posted = _post_fix_suggestions(client, repo, pr_number, results, diff)
+
     logger.info(
-        "Review complete for %s#%d — severity %d, event %s",
-        repo, pr_number, max_severity, review_event,
+        "Review complete for %s#%d — severity %d, event %s, suggestions %d",
+        repo, pr_number, max_severity, review_event, suggestions_posted,
     )
-    return jsonify({"ok": True, "severity": max_severity, "event": review_event})
+    return jsonify({
+        "ok": True,
+        "severity": max_severity,
+        "event": review_event,
+        "suggestions": suggestions_posted,
+    })
+
+
+# ── auto fix suggestions ──────────────────────────────────────────────────────
+
+def _post_fix_suggestions(
+    client: GitHubClient,
+    repo: str,
+    pr_number: int,
+    results: dict,
+    diff: str,
+) -> int:
+    """
+    Run the fix agent on all changed Python files and post GitHub Suggestions.
+    Returns the number of inline suggestions posted.
+    """
+    try:
+        pr_files = client.get_pr_files(repo, pr_number)
+        pr_info  = client.get_pr_info(repo, pr_number)
+        branch   = pr_info["head"]["ref"]
+    except Exception as exc:
+        logger.warning("Could not get PR files for auto-suggestions on %s#%d: %s", repo, pr_number, exc)
+        return 0
+
+    python_files = [
+        f for f in pr_files
+        if f["filename"].endswith(".py") and f["status"] != "removed"
+    ]
+    if not python_files:
+        return 0
+
+    diff_line_sets          = get_diff_line_set(diff)
+    all_suggestion_comments: list = []
+    all_fallback:            list = []
+
+    for file_info in python_files:
+        path = file_info["filename"]
+        try:
+            file_data  = client.get_file_content(repo, path, branch)
+            fix_result = run_fix_from_responses(file_data["content"], results)
+
+            if not fix_result.function_fixes:
+                continue
+
+            diff_lines = diff_line_sets.get(path, set())
+            suggestions, fallback = build_suggestion_comments(
+                fix_result.function_fixes, path, file_data["content"], diff_lines,
+            )
+            all_suggestion_comments.extend(suggestions)
+            all_fallback.extend((name, src, path) for name, src in fallback)
+            logger.info("%s: %d suggestion(s), %d fallback(s)", path, len(suggestions), len(fallback))
+        except Exception as exc:
+            logger.error("Could not generate suggestions for %s on %s#%d: %s", path, repo, pr_number, exc)
+
+    if not all_suggestion_comments and not all_fallback:
+        return 0
+
+    body_lines = [
+        "## 🔧 Suggested Fixes",
+        "",
+        "Click **Commit suggestion** on each fix you want to apply.",
+    ]
+
+    if all_fallback:
+        body_lines.append("\n**Fixes for functions outside this PR's diff (copy-paste manually):**\n")
+        for func_name, fixed_src, file_path in all_fallback:
+            body_lines += [
+                "<details>",
+                f"<summary><code>{func_name}()</code> in <code>{file_path}</code></summary>",
+                "",
+                "```python",
+                fixed_src.strip(),
+                "```",
+                "",
+                "</details>",
+                "",
+            ]
+
+    try:
+        client.post_pr_review(
+            repo, pr_number, "\n".join(body_lines), "COMMENT", all_suggestion_comments,
+        )
+        logger.info("Auto-posted %d suggestion(s) on %s#%d", len(all_suggestion_comments), repo, pr_number)
+    except Exception as exc:
+        logger.error("Could not post auto-suggestions on %s#%d: %s", repo, pr_number, exc)
+        return 0
+
+    return len(all_suggestion_comments)
 
 
 # ── issue_comment handler ─────────────────────────────────────────────────────
