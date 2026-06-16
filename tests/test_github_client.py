@@ -37,14 +37,10 @@ class TestSeverityEmoji:
 
 
 class TestReviewEvent:
-    def test_critical_requests_changes(self):
-        assert _review_event(90) == "REQUEST_CHANGES"
-
-    def test_low_severity_is_comment(self):
+    def test_always_comment(self):
+        assert _review_event(90) == "COMMENT"
         assert _review_event(30) == "COMMENT"
-
-    def test_clean_approves(self):
-        assert _review_event(0) == "APPROVE"
+        assert _review_event(0) == "COMMENT"
 
 
 

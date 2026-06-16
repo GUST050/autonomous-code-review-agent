@@ -192,12 +192,8 @@ def _severity_emoji(severity: int) -> str:
 
 
 def _review_event(max_severity: int) -> str:
-    """Decide GitHub review event based on worst severity found."""
-    if max_severity >= APPROVAL_THRESHOLD:
-        return "REQUEST_CHANGES"
-    if max_severity > 0:
-        return "COMMENT"
-    return "APPROVE"
+    """Always COMMENT — APPROVE/REQUEST_CHANGES are blocked on self-authored PRs."""
+    return "COMMENT"
 
 
 def _review_header(max_severity: int, issue_count: int) -> str:
