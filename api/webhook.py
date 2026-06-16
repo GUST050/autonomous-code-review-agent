@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
-from review import run_fix_from_responses, run_review
+from review import run_fix_from_responses, run_review_parallel
 from schemas.response import AgentResponse
 from utils.diff_parser import get_diff_line_set, parse_diff_locations
 from utils.github_client import (
@@ -151,12 +151,10 @@ def _handle_pull_request():
 
     # ── Phase 3: run all five review agents in parallel ───────────────────
     try:
-        final_state = run_review(combined_code, fix=False)
+        results = run_review_parallel(combined_code)
     except Exception as exc:
         logger.error("Review failed for %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
-
-    results      = final_state.get("results", {})
     max_severity = max((r.severity for r in results.values() if r), default=0)
 
     # ── Phase 4: build inline finding comments ────────────────────────────

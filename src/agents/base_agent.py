@@ -28,17 +28,19 @@ def _call_with_timeout(fn: Callable, timeout_seconds: int) -> Any:
     Run fn() in a background thread and return its result.
     Raises TimeoutError if the call has not completed within timeout_seconds.
 
-    Note: Python threads are not interruptible — the background thread continues
-    running after the timeout, but the caller proceeds immediately.  This is
-    acceptable: the LLM provider will eventually close the connection and the
-    thread will exit on its own.
+    IMPORTANT: shutdown(wait=False) is used so the caller returns immediately
+    on timeout without waiting for the background thread to finish.  The
+    background thread continues running (Python threads cannot be killed), but
+    the LLM provider will close the connection and the thread exits on its own.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError(f"LLM call timed out after {timeout_seconds}s")
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(fn)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError:
+        raise TimeoutError(f"LLM call timed out after {timeout_seconds}s")
+    finally:
+        executor.shutdown(wait=False)
 
 
 def _is_rate_limit(exc: Exception) -> bool:
