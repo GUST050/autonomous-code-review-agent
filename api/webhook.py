@@ -1,16 +1,17 @@
 """
-webhook.py — Vercel serverless function that receives GitHub webhooks.
+webhook.py — Flask app that receives GitHub webhook events.
 
-Handles two events:
-  pull_request  — runs all five review agents and posts a formal PR review.
-  issue_comment — if a PR comment body is exactly "fix", runs the fix agent
-                  and commits corrected files directly to the PR branch.
+Handles pull_request events (opened, synchronize, reopened):
+  1. Fetches the full content of every changed Python file.
+  2. Runs all five review agents in parallel.
+  3. If issues are found, runs the fix agent immediately (part of the same pipeline).
+  4. Posts one unified PR review: findings in the body, fixes as inline suggestions.
 
-Environment variables (set in Vercel dashboard):
+Environment variables:
   GITHUB_TOKEN          Personal Access Token with repo + PR review permissions
-  ANTHROPIC_API_KEY     Your Anthropic API key
-  OPENAI_API_KEY        Your OpenAI API key
-  GITHUB_WEBHOOK_SECRET Secret you chose when setting up the webhook on GitHub
+  ANTHROPIC_API_KEY     Anthropic API key (Haiku for review, Sonnet for fixes)
+  OPENAI_API_KEY        OpenAI API key (GPT-4o-mini for code quality)
+  GITHUB_WEBHOOK_SECRET Secret set when configuring the webhook on GitHub
 """
 import hashlib
 import hmac
@@ -23,14 +24,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
-from review import run_fix, run_fix_from_responses, run_review
+from review import run_fix_from_responses, run_review
 from utils.diff_parser import get_diff_line_set, parse_diff_locations
 from utils.github_client import (
     GitHubClient,
     _review_event,
     build_review_comments,
     build_suggestion_comments,
-    extract_findings_from_review,
     format_pr_review,
 )
 
@@ -78,16 +78,13 @@ def webhook():
     if event == "pull_request":
         return _handle_pull_request()
 
-    if event == "issue_comment":
-        return _handle_issue_comment()
-
     return jsonify({"ok": True, "message": "ignored"})
 
 
 # ── pull_request handler ──────────────────────────────────────────────────────
 
 def _handle_pull_request():
-    """Review new/updated PR and post formal findings as a PR review."""
+    """Review new/updated PR: run all agents, fix inline, post one unified review."""
     payload = request.json
     action  = payload.get("action", "")
 
@@ -96,7 +93,6 @@ def _handle_pull_request():
 
     repo      = payload["repository"]["full_name"]
     pr_number = payload["pull_request"]["number"]
-    head_sha  = payload["pull_request"]["head"]["sha"]
     logger.info("Reviewing %s#%d (action=%s)", repo, pr_number, action)
 
     env_error = _check_env()
@@ -105,18 +101,7 @@ def _handle_pull_request():
 
     client = GitHubClient(token=_GITHUB_TOKEN)
 
-    # Skip review if this synchronize was triggered by our own auto-fix commit.
-    # Without this, every fix commit would re-trigger a review of the already-fixed code.
-    if action == "synchronize":
-        try:
-            commit_msg = client.get_commit_message(repo, head_sha)
-            if commit_msg.startswith("auto-fix:"):
-                logger.info("Skipping review — triggered by auto-fix commit on %s#%d", repo, pr_number)
-                return jsonify({"ok": True, "message": "skipped — auto-fix commit"})
-        except Exception as exc:
-            logger.warning("Could not check commit message: %s — proceeding with review", exc)
-
-    # Fetch PR diff — used for positioning inline comments, not for the review itself
+    # Diff is used only for positioning inline comments — review agents get full files.
     try:
         diff = client.get_pr_diff(repo, pr_number)
     except Exception as exc:
@@ -126,9 +111,6 @@ def _handle_pull_request():
     if not diff.strip():
         return jsonify({"ok": True, "message": "empty diff — nothing to review"})
 
-    # Fetch full content of every changed Python file from the PR branch.
-    # Review agents see the whole file so they find pre-existing issues too,
-    # not just lines that happen to appear in the diff.
     try:
         pr_info      = client.get_pr_info(repo, pr_number)
         pr_files     = client.get_pr_files(repo, pr_number)
@@ -144,7 +126,6 @@ def _handle_pull_request():
     if not python_files:
         return jsonify({"ok": True, "message": "no Python files changed"})
 
-    # Combine all changed Python files into one review pass
     combined_code = ""
     file_contents: dict = {}
     for file_info in python_files:
@@ -165,94 +146,80 @@ def _handle_pull_request():
         logger.error("Review failed for %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
-    results    = final_state.get("results", {})
-    fix_result = final_state.get("fix_result")
-
-    # Inline comments placed on diff lines where the affected function appears
-    diff_locations   = parse_diff_locations(diff)
-    inline_comments  = build_review_comments(results, diff_locations)
-
+    results      = final_state.get("results", {})
     max_severity = max((r.severity for r in results.values() if r), default=0)
-    review_body  = format_pr_review(results, fix_result)
+
+    # ── Build inline finding comments ─────────────────────────────────────
+    diff_locations   = parse_diff_locations(diff)
+    finding_comments = build_review_comments(results, diff_locations)
+
+    # ── Run fix agent as part of the pipeline (before posting anything) ───
+    # Findings → fixes → one unified review.  The author sees a single event:
+    # findings in the body, clickable suggestions inline on the diff.
+    suggestion_comments: list = []
+    fallback_fixes:      list = []
+    if max_severity > 0:
+        diff_line_sets = get_diff_line_set(diff)
+        for path, content in file_contents.items():
+            try:
+                fix_result = run_fix_from_responses(content, results)
+                if not fix_result.function_fixes:
+                    continue
+                diff_lines = diff_line_sets.get(path, set())
+                suggestions, fallback = build_suggestion_comments(
+                    fix_result.function_fixes, path, content, diff_lines,
+                )
+                suggestion_comments.extend(suggestions)
+                fallback_fixes.extend((name, src, path) for name, src in fallback)
+                logger.info("%s: %d suggestion(s), %d fallback(s)", path, len(suggestions), len(fallback))
+            except Exception as exc:
+                logger.error("Fix generation failed for %s on %s#%d: %s", path, repo, pr_number, exc)
+
+    # ── Post one unified review ────────────────────────────────────────────
+    review_body  = _build_review_body(results, suggestion_comments, fallback_fixes)
     review_event = _review_event(max_severity)
+    all_inline   = finding_comments + suggestion_comments
 
     try:
-        client.post_pr_review(repo, pr_number, review_body, review_event, inline_comments)
+        client.post_pr_review(repo, pr_number, review_body, review_event, all_inline)
     except Exception as exc:
         logger.error("Could not post review on %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
 
-    # Automatically post fix suggestions when issues are found
-    suggestions_posted = 0
-    if max_severity > 0:
-        suggestions_posted = _post_fix_suggestions(
-            client, repo, pr_number, results, diff, file_contents,
-        )
-
     logger.info(
-        "Review complete for %s#%d — severity %d, event %s, suggestions %d",
-        repo, pr_number, max_severity, review_event, suggestions_posted,
+        "Review complete for %s#%d — severity %d, event %s, %d findings, %d suggestions",
+        repo, pr_number, max_severity, review_event,
+        len(finding_comments), len(suggestion_comments),
     )
     return jsonify({
         "ok": True,
-        "severity": max_severity,
-        "event": review_event,
-        "suggestions": suggestions_posted,
+        "severity":    max_severity,
+        "event":       review_event,
+        "findings":    len(finding_comments),
+        "suggestions": len(suggestion_comments),
     })
 
 
-# ── auto fix suggestions ──────────────────────────────────────────────────────
+def _build_review_body(results: dict, suggestion_comments: list, fallback_fixes: list) -> str:
+    """Findings summary + inline suggestion count + fallback fixes — all in one body."""
+    body = format_pr_review(results)
 
-def _post_fix_suggestions(
-    client: GitHubClient,
-    repo: str,
-    pr_number: int,
-    results: dict,
-    diff: str,
-    file_contents: dict,
-) -> int:
-    """
-    Run the fix agent on all changed Python files and post GitHub Suggestions.
-    Returns the number of inline suggestions posted.
-    file_contents: {path: content} — already fetched by the caller.
-    """
-    if not file_contents:
-        return 0
+    if not suggestion_comments and not fallback_fixes:
+        return body
 
-    diff_line_sets          = get_diff_line_set(diff)
-    all_suggestion_comments: list = []
-    all_fallback:            list = []
+    lines = [body, "", "---", ""]
 
-    for path, content in file_contents.items():
-        try:
-            fix_result = run_fix_from_responses(content, results)
+    if suggestion_comments:
+        n = len(suggestion_comments)
+        lines.append(
+            f"💡 **{n} fix{'es' if n != 1 else ''} suggested inline** — "
+            "click **Commit suggestion** on each fix you want to apply."
+        )
 
-            if not fix_result.function_fixes:
-                continue
-
-            diff_lines = diff_line_sets.get(path, set())
-            suggestions, fallback = build_suggestion_comments(
-                fix_result.function_fixes, path, content, diff_lines,
-            )
-            all_suggestion_comments.extend(suggestions)
-            all_fallback.extend((name, src, path) for name, src in fallback)
-            logger.info("%s: %d suggestion(s), %d fallback(s)", path, len(suggestions), len(fallback))
-        except Exception as exc:
-            logger.error("Could not generate suggestions for %s on %s#%d: %s", path, repo, pr_number, exc)
-
-    if not all_suggestion_comments and not all_fallback:
-        return 0
-
-    body_lines = [
-        "## 🔧 Suggested Fixes",
-        "",
-        "Click **Commit suggestion** on each fix you want to apply.",
-    ]
-
-    if all_fallback:
-        body_lines.append("\n**Fixes for functions outside this PR's diff (copy-paste manually):**\n")
-        for func_name, fixed_src, file_path in all_fallback:
-            body_lines += [
+    if fallback_fixes:
+        lines += ["", "**Fixes for functions outside this diff (copy-paste manually):**", ""]
+        for func_name, fixed_src, file_path in fallback_fixes:
+            lines += [
                 "<details>",
                 f"<summary><code>{func_name}()</code> in <code>{file_path}</code></summary>",
                 "",
@@ -261,243 +228,9 @@ def _post_fix_suggestions(
                 "```",
                 "",
                 "</details>",
-                "",
             ]
 
-    try:
-        client.post_pr_review(
-            repo, pr_number, "\n".join(body_lines), "COMMENT", all_suggestion_comments,
-        )
-        logger.info("Auto-posted %d suggestion(s) on %s#%d", len(all_suggestion_comments), repo, pr_number)
-    except Exception as exc:
-        logger.error("Could not post auto-suggestions on %s#%d: %s", repo, pr_number, exc)
-        return 0
-
-    return len(all_suggestion_comments)
-
-
-# ── issue_comment handler ─────────────────────────────────────────────────────
-
-def _handle_issue_comment():
-    """
-    When a PR comment body is exactly '/fix':
-      1. Post an immediate acknowledgement so the user knows the agent is running.
-      2. Read the previous review body to recover serialized agent findings.
-      3. Fetch each changed Python file from the PR branch.
-      4. Run the fix agent on each file.
-      5. Commit corrected files directly to the PR branch.
-      6. Post a summary comment listing what was changed.
-    """
-    payload = request.json
-    action  = payload.get("action", "")
-
-    # Only react to newly created comments
-    if action != "created":
-        return jsonify({"ok": True, "message": "ignored"})
-
-    # Ignore comments on regular issues (not PRs)
-    issue = payload.get("issue", {})
-    if "pull_request" not in issue:
-        return jsonify({"ok": True, "message": "not a PR comment"})
-
-    comment_body = payload.get("comment", {}).get("body", "").strip().lower()
-    if comment_body != "/fix":
-        return jsonify({"ok": True, "message": "not a fix command"})
-
-    pr_number = issue["number"]
-    repo      = payload["repository"]["full_name"]
-    logger.info("Fix command received for %s#%d", repo, pr_number)
-
-    env_error = _check_env()
-    if env_error:
-        return jsonify({"error": env_error}), 500
-
-    client = GitHubClient(token=_GITHUB_TOKEN)
-
-    # Acknowledge immediately so the user knows the agent is working.
-    # The fix agent takes 30-60 seconds — without this the PR looks unresponsive.
-    try:
-        client.post_pr_comment(
-            repo, pr_number,
-            "⏳ Fix agent is running — this usually takes 30–40 seconds. "
-            "A summary will appear when done.",
-        )
-    except Exception as exc:
-        logger.warning("Could not post acknowledgement comment: %s", exc)
-
-    # ── Step 1: Get PR branch name ────────────────────────────────────────
-    try:
-        pr_info = client.get_pr_info(repo, pr_number)
-        branch  = pr_info["head"]["ref"]
-    except Exception as exc:
-        logger.error("Could not get PR info for %s#%d: %s", repo, pr_number, exc)
-        return jsonify({"error": str(exc)}), 500
-
-    # ── Step 2: Recover findings from the most recent bot review ─────────
-    try:
-        reviews = client.get_pr_reviews(repo, pr_number)
-    except Exception as exc:
-        logger.error("Could not fetch reviews for %s#%d: %s", repo, pr_number, exc)
-        return jsonify({"error": str(exc)}), 500
-
-    findings_data: dict = {}
-    for review in reviews:  # reviews are newest-first
-        findings_data = extract_findings_from_review(review.get("body") or "")
-        if findings_data:
-            break
-
-    if not findings_data:
-        client.post_pr_comment(
-            repo, pr_number,
-            "⚠️ No previous review findings found. "
-            "Please wait for the initial review to complete before running `fix`.",
-        )
-        return jsonify({"ok": True, "message": "no findings"})
-
-    has_issues = any(d.get("severity", 0) > 0 for d in findings_data.values())
-    if not has_issues:
-        client.post_pr_comment(
-            repo, pr_number,
-            "✅ The previous review found no issues — nothing to fix!",
-        )
-        return jsonify({"ok": True, "message": "no issues"})
-
-    # ── Step 3: Get changed Python files ─────────────────────────────────
-    try:
-        pr_files = client.get_pr_files(repo, pr_number)
-    except Exception as exc:
-        logger.error("Could not get PR files for %s#%d: %s", repo, pr_number, exc)
-        return jsonify({"error": str(exc)}), 500
-
-    python_files = [
-        f for f in pr_files
-        if f["filename"].endswith(".py") and f["status"] != "removed"
-    ]
-
-    if not python_files:
-        client.post_pr_comment(repo, pr_number, "ℹ️ No Python files changed in this PR.")
-        return jsonify({"ok": True, "message": "no python files"})
-
-    # ── Step 4: Fetch diff to know which lines are visible ────────────────
-    try:
-        pr_diff      = client.get_pr_diff(repo, pr_number)
-        diff_line_sets = get_diff_line_set(pr_diff)
-    except Exception as exc:
-        logger.warning("Could not fetch diff for suggestions: %s — continuing", exc)
-        diff_line_sets = {}
-
-    # ── Step 5: Fix each file and build per-function suggestions ──────────
-    all_suggestion_comments: list = []
-    all_fallback:            list = []   # [(func_name, fixed_src, file_path)]
-    all_unfixable:           list = []
-    all_changes:             list = []
-    errors:                  list = []
-
-    for file_info in python_files:
-        path = file_info["filename"]
-        logger.info("Fixing %s", path)
-
-        try:
-            file_data  = client.get_file_content(repo, path, branch)
-            fix_result = run_fix(file_data["content"], findings_data)
-
-            all_changes.extend(fix_result.changes)
-            all_unfixable.extend(fix_result.unfixable or [])
-
-            if not fix_result.function_fixes:
-                logger.info("No function-level changes for %s", path)
-                continue
-
-            # Build suggestions for functions visible in the diff;
-            # collect fallbacks for functions outside any diff hunk.
-            diff_lines = diff_line_sets.get(path, set())
-            suggestions, fallback = build_suggestion_comments(
-                fix_result.function_fixes,
-                path,
-                file_data["content"],
-                diff_lines,
-            )
-            all_suggestion_comments.extend(suggestions)
-            all_fallback.extend((name, src, path) for name, src in fallback)
-            logger.info(
-                "%s: %d suggestion(s), %d fallback(s)",
-                path, len(suggestions), len(fallback),
-            )
-
-        except Exception as exc:
-            logger.error("Failed to fix %s: %s", path, exc)
-            errors.append(f"`{path}`: {exc}")
-
-    # ── Step 6: Post suggestions as a review (user accepts per fix) ───────
-    if all_suggestion_comments:
-        suggestion_body = (
-            "## 🔧 Fix Suggestions\n\n"
-            "Each suggestion below replaces one function. "
-            "Click **Commit suggestion** on those you want — skip the ones you don't."
-        )
-        try:
-            client.post_pr_review(
-                repo, pr_number, suggestion_body, "COMMENT", all_suggestion_comments
-            )
-            logger.info(
-                "Posted %d suggestion(s) on %s#%d",
-                len(all_suggestion_comments), repo, pr_number,
-            )
-        except Exception as exc:
-            logger.error("Could not post suggestions on %s#%d: %s", repo, pr_number, exc)
-            errors.append(f"Could not post suggestions: {exc}")
-
-    # ── Step 7: Post summary comment ──────────────────────────────────────
-    summary_lines = ["## 🔧 Fix Summary\n"]
-
-    if all_suggestion_comments:
-        n = len(all_suggestion_comments)
-        summary_lines.append(
-            f"**{n} inline suggestion{'s' if n != 1 else ''} posted above** — "
-            "accept each one individually with **Commit suggestion**.\n"
-        )
-
-    if all_fallback:
-        summary_lines.append(
-            "**Fixes for functions outside this PR's diff (copy-paste manually):**\n"
-        )
-        for func_name, fixed_src, file_path in all_fallback:
-            summary_lines += [
-                "<details>",
-                f"<summary><code>{func_name}()</code> in <code>{file_path}</code></summary>",
-                "",
-                "```python",
-                fixed_src.strip(),
-                "```",
-                "",
-                "</details>",
-                "",
-            ]
-
-    if all_unfixable:
-        summary_lines.append("**Requires manual intervention:**")
-        for item in all_unfixable:
-            summary_lines.append(f"- ⚠️ {item}")
-        summary_lines.append("")
-
-    if errors:
-        summary_lines.append("**Errors:**")
-        for err in errors:
-            summary_lines.append(f"- ❌ {err}")
-        summary_lines.append("")
-
-    if not all_suggestion_comments and not all_fallback and not errors:
-        summary_lines.append("ℹ️ No auto-fixable issues were found in the changed files.")
-
-    client.post_pr_comment(repo, pr_number, "\n".join(summary_lines))
-
-    return jsonify({
-        "ok":          True,
-        "suggestions": len(all_suggestion_comments),
-        "fallback":    len(all_fallback),
-        "unfixable":   len(all_unfixable),
-        "errors":      len(errors),
-    })
+    return "\n".join(lines)
 
 
 handler = app

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 class ModelConfig:
     """Immutable configuration for one LLM model."""
     model: str
-    provider: str                   # "anthropic" | "xai" | "openai"
+    provider: str                   # "anthropic" | "openai"
     temperature: float
     max_tokens: int
     input_cost_per_million: float   # USD per 1M input tokens
@@ -45,7 +45,6 @@ CLAUDE_SONNET = ModelConfig(
     output_cost_per_million=15.00,
 )
 
-
 GPT4O_MINI = ModelConfig(
     model="gpt-4o-mini",
     provider="openai",
@@ -56,8 +55,7 @@ GPT4O_MINI = ModelConfig(
 )
 
 # ── Agent → model assignments ─────────────────────────────────────────────────
-# Anthropic: precise instruction-following → critical security patterns
-# xAI Grok:  logical/mathematical reasoning → algorithms and flow analysis
+# Anthropic: precise instruction-following → security and performance
 # OpenAI:    broad code understanding → quality and style
 
 AGENT_CONFIGS: dict[str, ModelConfig] = {

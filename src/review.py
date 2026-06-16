@@ -81,34 +81,3 @@ def run_fix_from_responses(code: str, results: Dict[str, Optional[AgentResponse]
         fast_llm=_build_llm(FIX_GENERATOR_FAST),
     )
     return fix_agent.generate_fixes(code, results)
-
-
-def run_fix(code: str, findings_data: Dict[str, dict]) -> FixResponse:
-    """
-    Run only the fix agent using pre-computed review findings.
-
-    Used by the human-in-the-loop 'fix' command so we don't re-run all
-    five review agents — the findings were captured during the initial
-    review and stored in the PR review body as a hidden HTML comment.
-
-    findings_data: the dict returned by extract_findings_from_review(),
-    keyed by agent name, each value a dict with 'findings', 'severity',
-    'confidence', 'locations', 'reasoning'.
-    """
-    agent_results: Dict[str, Optional[AgentResponse]] = {
-        agent_name: AgentResponse(
-            reasoning=data.get("reasoning", "Restored from previous review"),
-            findings=data.get("findings", []),
-            severity=data.get("severity", 0),
-            confidence=data.get("confidence", 0),
-            locations=data.get("locations", []),
-        )
-        for agent_name, data in findings_data.items()
-    }
-
-    cfg = AGENT_CONFIGS
-    fix_agent = FixGeneratorAgent(
-        llm=_build_llm(cfg["Fix Generator"]),
-        fast_llm=_build_llm(FIX_GENERATOR_FAST),
-    )
-    return fix_agent.generate_fixes(code, agent_results)
