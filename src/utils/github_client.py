@@ -2,7 +2,9 @@
 github_client.py — GitHub REST API for fetching PR diffs and posting PR reviews.
 """
 import base64
+import json
 import logging
+import re
 from typing import Dict, List, Optional
 
 import requests
@@ -14,7 +16,9 @@ from utils.diff_parser import FunctionLocation, extract_function_name, get_funct
 
 logger = logging.getLogger(__name__)
 
-_GITHUB_API = "https://api.github.com"
+_GITHUB_API      = "https://api.github.com"
+_FINDINGS_MARKER = "<!-- agent-findings-v1:"
+_FINDINGS_CLOSE  = " -->"
 
 
 # ── Inline comment builder ────────────────────────────────────────────────────
@@ -128,6 +132,35 @@ def build_suggestion_comments(
         comments.append(comment)
 
     return comments, fallback
+
+
+# ── Findings serialization ───────────────────────────────────────────────────
+
+def _embed_findings(results: Dict[str, Optional[AgentResponse]]) -> str:
+    """Serialize findings into a hidden HTML comment embedded in the review body."""
+    data = {
+        agent: {"findings": r.findings, "severity": r.severity, "locations": r.locations}
+        for agent, r in results.items()
+        if r is not None
+    }
+    encoded = base64.b64encode(json.dumps(data).encode()).decode()
+    return f"{_FINDINGS_MARKER}{encoded}{_FINDINGS_CLOSE}"
+
+
+def extract_findings_from_review(body: str) -> dict:
+    """Extract serialized findings from a review body. Returns {} if not found."""
+    if not body:
+        return {}
+    match = re.search(
+        re.escape(_FINDINGS_MARKER) + r"([A-Za-z0-9+/=]+)" + re.escape(_FINDINGS_CLOSE),
+        body,
+    )
+    if not match:
+        return {}
+    try:
+        return json.loads(base64.b64decode(match.group(1)).decode())
+    except Exception:
+        return {}
 
 
 # ── PR review body formatter ──────────────────────────────────────────────────
@@ -265,6 +298,8 @@ def format_pr_review(
     lines += [
         "",
         "*Powered by [Autonomous Code Review Agent](https://github.com/GUST050/autonomous-code-review-agent)*",
+        "",
+        _embed_findings(results),
     ]
     return "\n".join(lines)
 
@@ -310,6 +345,13 @@ class GitHubClient:
         r = requests.get(url, headers=self._headers, timeout=30)
         r.raise_for_status()
         return r.json()
+
+    def get_pr_reviews(self, repo: str, pr_number: int) -> list:
+        """Return PR reviews newest first."""
+        url = f"{_GITHUB_API}/repos/{repo}/pulls/{pr_number}/reviews"
+        r = requests.get(url, headers=self._headers, timeout=30)
+        r.raise_for_status()
+        return list(reversed(r.json()))
 
     # ── File content ──────────────────────────────────────────────────────
 

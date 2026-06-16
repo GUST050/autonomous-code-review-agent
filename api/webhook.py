@@ -26,12 +26,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from flask import Flask, jsonify, request
 
 from review import run_fix_from_responses, run_review
+from schemas.response import AgentResponse
 from utils.diff_parser import get_diff_line_set, parse_diff_locations
 from utils.github_client import (
     GitHubClient,
     _review_event,
     build_review_comments,
     build_suggestion_comments,
+    extract_findings_from_review,
     format_pr_review,
 )
 
@@ -76,6 +78,9 @@ def webhook():
 
     if event == "pull_request":
         return _handle_pull_request()
+
+    if event == "issue_comment":
+        return _handle_issue_comment()
 
     return jsonify({"ok": True, "message": "ignored"})
 
@@ -228,6 +233,137 @@ def _build_review_body(results: dict, suggestion_comments: list, fallback_fixes:
                 "</details>",
             ]
     return "\n".join(lines)
+
+
+# ── /fix comment handler ─────────────────────────────────────────────────────
+
+def _handle_issue_comment():
+    """/fix command on a PR comment — runs fix agent using findings from the last review."""
+    payload = request.json
+    action  = payload.get("action", "")
+
+    if action != "created":
+        return jsonify({"ok": True, "message": "ignored"})
+
+    # Only handle PR comments (issues don't have pull_request key)
+    if "pull_request" not in payload.get("issue", {}):
+        return jsonify({"ok": True, "message": "ignored"})
+
+    comment = payload.get("comment", {}).get("body", "")
+    if "/fix" not in comment:
+        return jsonify({"ok": True, "message": "ignored"})
+
+    repo      = payload["repository"]["full_name"]
+    pr_number = payload["issue"]["number"]
+    logger.info("Fix requested on %s#%d", repo, pr_number)
+
+    env_error = _check_env()
+    if env_error:
+        return jsonify({"error": env_error}), 500
+
+    client = GitHubClient(token=_GITHUB_TOKEN)
+
+    # Find the latest bot review with embedded findings
+    try:
+        reviews = client.get_pr_reviews(repo, pr_number)
+    except Exception as exc:
+        logger.error("Could not fetch reviews for %s#%d: %s", repo, pr_number, exc)
+        return jsonify({"error": str(exc)}), 500
+
+    bot_review = next(
+        (r for r in reviews if r.get("body") and "agent-findings-v1" in r["body"]),
+        None,
+    )
+    if not bot_review:
+        return jsonify({"ok": True, "message": "no review found — open a PR first"})
+
+    findings_data = extract_findings_from_review(bot_review["body"])
+    if not findings_data:
+        return jsonify({"ok": True, "message": "no findings in review"})
+
+    max_severity = max((d.get("severity", 0) for d in findings_data.values()), default=0)
+    if max_severity == 0:
+        return jsonify({"ok": True, "message": "no issues to fix"})
+
+    # Reconstruct AgentResponse objects from serialized findings
+    results = {
+        agent: AgentResponse(
+            reasoning="",
+            findings=data["findings"],
+            severity=data["severity"],
+            locations=data.get("locations", []),
+        )
+        for agent, data in findings_data.items()
+    }
+
+    # Fetch PR files and diff in parallel
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_diff  = pool.submit(client.get_pr_diff,  repo, pr_number)
+        f_info  = pool.submit(client.get_pr_info,  repo, pr_number)
+        f_files = pool.submit(client.get_pr_files, repo, pr_number)
+        try:
+            diff     = f_diff.result()
+            pr_info  = f_info.result()
+            pr_files = f_files.result()
+        except Exception as exc:
+            logger.error("GitHub API error on /fix for %s#%d: %s", repo, pr_number, exc)
+            return jsonify({"error": str(exc)}), 500
+
+    branch       = pr_info["head"]["ref"]
+    python_files = [
+        f["filename"] for f in pr_files
+        if f["filename"].endswith(".py") and f["status"] != "removed"
+    ]
+
+    if not python_files:
+        return jsonify({"ok": True, "message": "no Python files"})
+
+    # Fetch file contents in parallel
+    file_contents: dict = {}
+    with ThreadPoolExecutor(max_workers=len(python_files)) as pool:
+        futures = {
+            pool.submit(client.get_file_content, repo, path, branch): path
+            for path in python_files
+        }
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                file_contents[path] = future.result()["content"]
+            except Exception as exc:
+                logger.warning("Could not fetch %s: %s", path, exc)
+
+    # Run fix agent and collect suggestions
+    diff_line_sets      = get_diff_line_set(diff)
+    suggestion_comments: list = []
+    fallback_fixes:      list = []
+
+    for path, content in file_contents.items():
+        try:
+            fix_result = run_fix_from_responses(content, results)
+            if not fix_result.function_fixes:
+                continue
+            diff_lines = diff_line_sets.get(path, set())
+            suggestions, fallback = build_suggestion_comments(
+                fix_result.function_fixes, path, content, diff_lines,
+            )
+            suggestion_comments.extend(suggestions)
+            fallback_fixes.extend((name, src, path) for name, src in fallback)
+        except Exception as exc:
+            logger.error("Fix failed for %s on %s#%d: %s", path, repo, pr_number, exc)
+
+    if not suggestion_comments and not fallback_fixes:
+        return jsonify({"ok": True, "message": "no auto-fixable issues found"})
+
+    review_body = _build_review_body({}, suggestion_comments, fallback_fixes)
+
+    try:
+        client.post_pr_review(repo, pr_number, review_body, "COMMENT", suggestion_comments)
+    except Exception as exc:
+        logger.error("Could not post fix suggestions on %s#%d: %s", repo, pr_number, exc)
+        return jsonify({"error": str(exc)}), 500
+
+    logger.info("Posted %d fix suggestion(s) on %s#%d", len(suggestion_comments), repo, pr_number)
+    return jsonify({"ok": True, "suggestions": len(suggestion_comments)})
 
 
 handler = app
