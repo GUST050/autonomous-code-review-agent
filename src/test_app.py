@@ -12,6 +12,7 @@ def get_user(username, password):
     if user and user[2] == password:
         return user
     return None
+    
 
 
 def hash_password(password):
