@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class AgentUsage:
+    """Accumulated token counts and cost estimate for one agent's LLM calls."""
     agent_name: str
     input_cost_per_token: float
     output_cost_per_token: float
@@ -19,10 +20,12 @@ class AgentUsage:
 
     @property
     def total_tokens(self) -> int:
+        """Sum of input and output tokens consumed."""
         return self.input_tokens + self.output_tokens
 
     @property
     def estimated_cost_usd(self) -> float:
+        """Estimated USD cost based on per-token pricing from ModelConfig."""
         return (
             self.input_tokens  * self.input_cost_per_token +
             self.output_tokens * self.output_cost_per_token
@@ -33,6 +36,7 @@ class TokenTracker(BaseCallbackHandler):
     """One tracker per agent with correct per-model pricing."""
 
     def __init__(self, agent_name: str, input_cost_per_token: float, output_cost_per_token: float):
+        """Attach to an LLM instance to accumulate its token usage across all calls."""
         self._usage = AgentUsage(
             agent_name=agent_name,
             input_cost_per_token=input_cost_per_token,
@@ -49,6 +53,7 @@ class TokenTracker(BaseCallbackHandler):
         )
 
     def on_llm_end(self, response: LLMResult, **_kwargs: Any):
+        """LangChain callback: called after every LLM completion. Accumulates token counts."""
         found_metadata = False
         for gen_list in response.generations:
             for gen in gen_list:
@@ -67,10 +72,12 @@ class TokenTracker(BaseCallbackHandler):
 
     @property
     def usage(self) -> AgentUsage:
+        """The accumulated token usage for this agent."""
         return self._usage
 
 
 def combined_report(trackers: List[TokenTracker]) -> str:
+    """Format a table showing token counts and cost for each agent, plus totals."""
     lines = ["\n TOKEN USAGE SUMMARY", "-" * 58]
     total_in = total_out = 0
     total_cost = 0.0

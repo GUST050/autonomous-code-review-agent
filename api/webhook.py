@@ -49,6 +49,7 @@ _GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")
 
 
 def _valid_signature(payload: bytes, signature: str) -> bool:
+    """Return True if the X-Hub-Signature-256 header matches the HMAC of the payload."""
     if not _WEBHOOK_SECRET:
         logger.error("GITHUB_WEBHOOK_SECRET not configured — rejecting all webhook requests")
         return False
@@ -59,6 +60,7 @@ def _valid_signature(payload: bytes, signature: str) -> bool:
 
 
 def _check_env() -> Optional[str]:
+    """Return an error message if any required environment variable is missing, else None."""
     if not _GITHUB_TOKEN:
         return "GITHUB_TOKEN not configured"
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -68,6 +70,7 @@ def _check_env() -> Optional[str]:
 
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
+    """Main webhook entry point. Validates signature then routes to the correct event handler."""
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not _valid_signature(request.get_data(), signature):
         logger.warning("Rejected request with invalid signature")
@@ -88,6 +91,11 @@ def webhook():
 
 
 def _handle_pull_request():
+    """
+    Handle pull_request events (opened, synchronize, reopened).
+    Fetches the diff and file contents, runs all review agents in parallel,
+    then posts a single PR review with inline findings.
+    """
     payload   = request.json
     action    = payload.get("action", "")
 
@@ -182,6 +190,12 @@ def _handle_pull_request():
 
 
 def _build_review_body(results: dict, suggestion_comments: list, fallback_fixes: list) -> str:
+    """
+    Build the review body for the /fix response.
+    If results is provided, uses the normal PR review format.
+    Otherwise builds a summary header with counts of inline suggestions and fallback fixes.
+    Fallback fixes (functions outside the diff) are rendered as collapsible copy-paste blocks.
+    """
     if results:
         body = format_pr_review(results)
     else:

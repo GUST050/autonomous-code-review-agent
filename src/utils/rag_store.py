@@ -1,9 +1,10 @@
 """
 rag_store.py — ChromaDB-backed knowledge store for CVE/CWE/OWASP retrieval.
 
-The store is built once on first use (lazy init) from data/rag/knowledge_base.json.
-Each entry's description is embedded with the default MiniLM model (local, no API cost).
-query() returns the top-k most semantically similar entries for a given finding text.
+The store is built once on first use (lazy singleton) from data/rag/knowledge_base.json.
+Each entry's description is embedded with OpenAI text-embedding-3-small via the API.
+query() returns the top-k most semantically similar entries for a given finding text,
+filtered by cosine distance threshold so irrelevant matches are excluded.
 """
 from __future__ import annotations
 
@@ -96,7 +97,8 @@ class RagStore:
     def query(self, text: str, n_results: int = 2) -> List[KbEntry]:
         """
         Return up to n_results KbEntries whose description is semantically
-        closest to text.  Entries with L2 distance > threshold are excluded.
+        closest to text.  Entries with cosine distance > _SIMILARITY_THRESHOLD
+        (0=identical, 1=orthogonal) are excluded as irrelevant.
         """
         if not text.strip():
             return []
@@ -115,6 +117,7 @@ class RagStore:
     # ── Private ────────────────────────────────────────────────────────────────
 
     def _build(self, kb_path: pathlib.Path) -> None:
+        """Load knowledge_base.json and add all entries to the ChromaDB collection."""
         with open(kb_path, encoding="utf-8") as fh:
             raw = json.load(fh)
 

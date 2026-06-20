@@ -37,6 +37,7 @@ def login_user(username, password):
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments. Returns a Namespace with file, diff, fix, ci, and output fields."""
     parser = argparse.ArgumentParser(
         prog="code-review-agent",
         description="Autonomous Code Review Agent — reviews code with 5 parallel AI agents.",
@@ -60,6 +61,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_code(args: argparse.Namespace) -> tuple[str, str]:
+    """Return (source_code, display_label) from --file, --diff, or the built-in demo snippet."""
     if args.file:
         return read_from_file(args.file)
     if args.diff:
@@ -68,6 +70,7 @@ def load_code(args: argparse.Namespace) -> tuple[str, str]:
 
 
 def build_agents() -> tuple[list, FixGeneratorAgent, list[TokenTracker]]:
+    """Instantiate all five review agents, the fix agent, and one token tracker per agent."""
     cfg = AGENT_CONFIGS
     trackers = {name: TokenTracker.from_config(name, model) for name, model in cfg.items()}
 
@@ -89,6 +92,7 @@ def build_agents() -> tuple[list, FixGeneratorAgent, list[TokenTracker]]:
 
 
 def _save_output(final_state: dict, output_path: str) -> None:
+    """Write the fixed source file to disk. Prints a message; does nothing if no fixed code exists."""
     fix_result = final_state.get("fix_result")
     if not fix_result or not fix_result.fixed_code:
         print("\nNothing to save — no fixed code was generated.")
@@ -124,6 +128,7 @@ def _prompt_accept_fixes(final_state: dict, output_path: Optional[str]) -> None:
 
 
 def main():
+    """CLI entry point: load code, run review, print report, optionally save fix, exit 1 in CI if severe."""
     args = parse_args()
 
     if args.output and not args.fix:

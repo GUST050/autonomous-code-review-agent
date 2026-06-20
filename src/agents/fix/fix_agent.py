@@ -127,6 +127,14 @@ class FixGeneratorAgent(BaseAgent):
         code: str,
         results: Dict[str, Optional[AgentResponse]],
     ) -> FixResponse:
+        """
+        Main entry point: fix all flagged functions in the given source file.
+
+        Parses code into sections, maps findings to their sections, fixes each
+        function in parallel, fixes the header last, then assembles the complete
+        corrected file. Returns a FixResponse with fixed_code, per-change summaries,
+        and any issues that require manual intervention.
+        """
         sections = split_code(code)
         findings_by_section = self._map_findings(results, sections)
 
@@ -263,6 +271,7 @@ class FixGeneratorAgent(BaseAgent):
         findings: List[_Finding],
         llm: Optional[_BaseChatModel],
     ) -> FunctionFixResponse:
+        """Send one function + its findings to the LLM and return the corrected FunctionFixResponse."""
         findings_text = self._format_findings(findings)
         prompt = (
             f"Fix ONLY the `{section.name}` function shown below. "
@@ -290,6 +299,10 @@ class FixGeneratorAgent(BaseAgent):
         needed_imports: List[str],
         llm: Optional[_BaseChatModel],
     ) -> FunctionFixResponse:
+        """
+        Fix the module header: merges new imports from fixed functions, removes hardcoded
+        secrets, and returns the corrected header source via LLM.
+        """
         findings_text = (
             self._format_findings(findings) if findings else "No module-level findings."
         )

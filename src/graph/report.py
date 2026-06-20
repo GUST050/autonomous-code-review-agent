@@ -13,6 +13,7 @@ _MODULE_LEVEL = "MODULE LEVEL"
 
 
 def _severity_label(severity: int) -> str:
+    """Convert a numeric 0-100 severity score to a human-readable label."""
     if severity >= APPROVAL_THRESHOLD:
         return "CRITICAL — fix immediately before merging"
     if severity >= 60:
@@ -64,6 +65,10 @@ def generate_final_report(
     results: Dict[str, Optional[AgentResponse]],
     fix_result: Optional[FixResponse],
 ) -> str:
+    """
+    Render the full CLI report: findings grouped by function, references,
+    agent summary table, and applied fixes (if fix=True was requested).
+    """
     lines: list[str] = ["\n=== FINAL CODE REVIEW REPORT ==="]
 
     grouped, func_severity = _group_findings(results)
