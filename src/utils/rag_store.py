@@ -20,7 +20,7 @@ _DEFAULT_KB = (
     pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "rag" / "knowledge_base.json"
 )
 _COLLECTION = "security_knowledge"
-_SIMILARITY_THRESHOLD = 1.4   # L2 distance above this = irrelevant match
+_SIMILARITY_THRESHOLD = 0.5   # cosine distance above this = irrelevant match (0=identical, 2=opposite)
 
 
 @dataclass
@@ -55,15 +55,19 @@ class RagStore:
     _lock: threading.Lock = threading.Lock()
 
     def __init__(self, kb_path: pathlib.Path = _DEFAULT_KB):
+        import os
         import chromadb
-        from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+        from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
         self._client = chromadb.Client()
-        self._ef = DefaultEmbeddingFunction()
+        self._ef = OpenAIEmbeddingFunction(
+            api_key=os.environ["OPENAI_API_KEY"],
+            model_name="text-embedding-3-small",
+        )
         self._col = self._client.get_or_create_collection(
             name=_COLLECTION,
             embedding_function=self._ef,
-            metadata={"hnsw:space": "l2"},
+            metadata={"hnsw:space": "cosine"},
         )
         self._entries: dict[str, KbEntry] = {}
         self._build(kb_path)

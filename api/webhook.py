@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, jsonify, request
 
+from agents.rag import RagEnricher
 from review import run_fix_from_responses, run_review_multifile
 from schemas.response import AgentResponse
 from utils.code_splitter import split_code
@@ -148,6 +149,7 @@ def _handle_pull_request():
     # ── Phase 3: run all five review agents in parallel ───────────────────
     try:
         results = run_review_multifile(file_contents)
+        results = RagEnricher().enrich(results)
     except Exception as exc:
         logger.error("Review failed for %s#%d: %s", repo, pr_number, exc)
         return jsonify({"error": str(exc)}), 500
