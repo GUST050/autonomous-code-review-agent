@@ -5,6 +5,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://python.org)
 [![Claude](https://img.shields.io/badge/Claude-Haiku%20%2F%20Sonnet-blueviolet)](https://anthropic.com)
 [![GPT-4o](https://img.shields.io/badge/GPT--4o-mini-green)](https://openai.com)
+[![LangGraph](https://img.shields.io/badge/LangGraph-visualisation-orange)](https://langchain-ai.github.io/langgraph/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 ---
@@ -213,6 +214,8 @@ api/webhook.py  (Vercel serverless, maxDuration=300s)
             • Post inline GitHub suggestion comments on diff lines
             • Functions outside the diff → collapsible copy-paste blocks
 ```
+
+**LangGraph visualisation:** The full agent graph is defined in `src/graph/review_graph.py` and can be opened in [LangGraph Studio](https://github.com/langchain-ai/langgraph-studio) to visually explore the flow — nodes, edges, fan-out, and state transitions. The production execution path uses `ThreadPoolExecutor` directly for true parallelism, but the graph definition serves as living architecture documentation.
 
 **How findings persist without a database:** After each review, all findings are serialized as JSON, base64-encoded, and embedded in a hidden HTML comment inside the PR review body. When `/fix` is triggered, the agent decodes them directly from GitHub — no external storage needed.
 
