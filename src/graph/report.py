@@ -50,7 +50,7 @@ def _group_findings(
             loc.split("(")[0].split(".")[0].strip()
             for loc in (result.locations or [])
         ]
-        locations = [l for l in locations if l]
+        locations = [loc for loc in locations if loc]
 
         for finding in result.findings:
             func = _route_finding(finding, locations)

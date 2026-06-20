@@ -30,10 +30,7 @@ class AgentUsage:
 
 
 class TokenTracker(BaseCallbackHandler):
-    """
-    En tracker per agent med korrekt prissättning per modell.
-    Skapa med rätt in/out-kostnad per token för den modell agenten kör.
-    """
+    """One tracker per agent with correct per-model pricing."""
 
     def __init__(self, agent_name: str, input_cost_per_token: float, output_cost_per_token: float):
         self._usage = AgentUsage(

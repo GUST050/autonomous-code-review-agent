@@ -128,53 +128,6 @@ def run_review(
     }
 
 
-def run_review_parallel(code: str) -> Dict[str, Optional[AgentResponse]]:
-    """
-    Run all five review agents in parallel with a hard total deadline.
-
-    Bypasses LangGraph (which runs sync nodes sequentially in 0.6+) so all
-    five agents truly execute simultaneously.  The overall budget is
-    LLM_TIMEOUT + 0.5s — agents still running after that window are abandoned
-    via shutdown(wait=False) and counted as empty (severity=0).  This bounds
-    the entire review to at most LLM_TIMEOUT + 0.5s regardless of LLM latency.
-    """
-    cfg = AGENT_CONFIGS
-    trackers = {name: TokenTracker.from_config(name, model) for name, model in cfg.items()}
-
-    agents = [
-        InjectionAgent(   llm=_build_llm(cfg["Injection Expert"]),   tracker=trackers["Injection Expert"]),
-        AuthAgent(        llm=_build_llm(cfg["Auth Expert"]),         tracker=trackers["Auth Expert"]),
-        SecretsAgent(     llm=_build_llm(cfg["Secrets Expert"]),      tracker=trackers["Secrets Expert"]),
-        PerformanceAgent( llm=_build_llm(cfg["Performance Expert"]),  tracker=trackers["Performance Expert"]),
-        QualityAgent(     llm=_build_llm(cfg["Code Quality Expert"]), tracker=trackers["Code Quality Expert"]),
-    ]
-
-    pool = ThreadPoolExecutor(max_workers=len(agents))
-    future_to_name = {pool.submit(agent.review_code, code): agent.name for agent in agents}
-
-    done, not_done = _concurrent_wait(future_to_name.keys(), timeout=LLM_TIMEOUT + 0.5)
-    pool.shutdown(wait=False)
-
-    if not_done:
-        names = [future_to_name[f] for f in not_done]
-        logger.warning("Abandoned slow agents after %ds: %s", LLM_TIMEOUT, names)
-
-    empty = AgentResponse(reasoning="Timed out", findings=[], severity=0, confidence=0)
-    results: Dict[str, Optional[AgentResponse]] = {
-        future_to_name[f]: empty for f in not_done
-    }
-    for future in done:
-        name = future_to_name[future]
-        try:
-            results[name] = future.result()
-        except Exception as exc:
-            logger.error("[%s] agent failed: %s", name, exc)
-            results[name] = AgentResponse(
-                reasoning=f"Agent failed: {exc}", findings=[], severity=0, confidence=0,
-            )
-    return results
-
-
 def run_review_multifile(file_contents: Dict[str, str]) -> Dict[str, Optional[AgentResponse]]:
     """
     Run all five review agents on every file independently, all in parallel.
