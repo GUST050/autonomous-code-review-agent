@@ -33,13 +33,20 @@ class KbEntry:
     remediation: str
 
     def label(self) -> str:
-        """Short reference label shown in the report."""
+        """Short reference label shown in the PR review."""
         parts = [self.id, self.title]
         if self.owasp:
             parts.append(f"OWASP {self.owasp}")
         if self.cvss is not None:
             parts.append(f"CVSS {self.cvss}")
         return " | ".join(parts)
+
+    def fix_hint(self) -> str:
+        """Full reference label including remediation — used in fix agent prompts."""
+        base = self.label()
+        if self.remediation:
+            return f"{base} → {self.remediation}"
+        return base
 
 
 class RagStore:

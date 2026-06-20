@@ -54,7 +54,7 @@ class RagEnricher:
                 for entry in store.query(finding, n_results=_RESULTS_PER_FINDING):
                     if entry.id not in seen_ids:
                         seen_ids.add(entry.id)
-                        refs.append(entry.label())
+                        refs.append(entry.fix_hint())
 
             if refs:
                 result.references = refs

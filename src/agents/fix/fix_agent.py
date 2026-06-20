@@ -35,8 +35,8 @@ from ..base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
-# Findings tuple: (agent_name, finding_text, severity)
-_Finding = Tuple[str, str, int]
+# Findings tuple: (agent_name, finding_text, severity, rag_references)
+_Finding = Tuple[str, str, int, List[str]]
 
 
 
@@ -367,16 +367,17 @@ class FixGeneratorAgent(BaseAgent):
                     key for key in known_locations if finding_names_function(key, finding)
                 ]
 
+                refs = result.references or []
                 if matched_keys:
                     for key in matched_keys:
-                        by_section[key].append((agent_name, finding, sev))
+                        by_section[key].append((agent_name, finding, sev, refs))
                     continue
 
                 if known_locations:
                     for key in known_locations:
-                        by_section[key].append((agent_name, finding, sev))
+                        by_section[key].append((agent_name, finding, sev, refs))
                 else:
-                    by_section["__header__"].append((agent_name, finding, sev))
+                    by_section["__header__"].append((agent_name, finding, sev, refs))
 
         return dict(by_section)
 
@@ -384,12 +385,17 @@ class FixGeneratorAgent(BaseAgent):
 
     @staticmethod
     def _format_findings(findings: List[_Finding]) -> str:
-        """Format a list of (agent, text, severity) tuples as a readable block."""
+        """Format findings as a readable block, including RAG remediation hints."""
         if not findings:
             return "No findings."
         lines = []
-        for agent_name, finding, sev in sorted(findings, key=lambda x: x[2], reverse=True):
+        seen_refs: set = set()
+        for agent_name, finding, sev, refs in sorted(findings, key=lambda x: x[2], reverse=True):
             lines.append(f"  [{agent_name}] (severity {sev}) {finding}")
+            for ref in refs:
+                if ref not in seen_refs:
+                    seen_refs.add(ref)
+                    lines.append(f"    ↳ {ref}")
         return "\n".join(lines)
 
     # ── Kept for backward compatibility with existing tests ───────────────────
