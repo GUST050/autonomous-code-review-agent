@@ -74,7 +74,7 @@ FIX_GENERATOR_FAST = CLAUDE_HAIKU
 
 APPROVAL_THRESHOLD: int = 80  # Severity >= this triggers human approval
 MAX_RETRIES: int = 2          # LLM call retries (rate-limit only — timeout exits immediately)
-LLM_TIMEOUT: int = 5          # Seconds before a review-agent LLM call is considered hung
+LLM_TIMEOUT: int = 30         # Seconds before a review-agent LLM call is considered hung
 FIX_TIMEOUT: int = 60         # Seconds for fix-agent calls (Sonnet code generation)
 FIX_MAX_WORKERS: int = 4      # Max parallel LLM calls in fix generation
 
