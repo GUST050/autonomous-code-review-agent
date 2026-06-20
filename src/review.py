@@ -5,8 +5,8 @@ Used by the webhook handler and any other non-CLI caller.
 The CLI (main.py) handles argument parsing and user prompts separately.
 """
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait as _concurrent_wait
+from typing import Dict, List, Optional
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
@@ -19,9 +19,7 @@ from agents import (
     PerformanceAgent,
     FixGeneratorAgent,
 )
-from config import AGENT_CONFIGS, FIX_GENERATOR_FAST
-from graph import create_review_graph
-from runner import ReviewRunner
+from config import AGENT_CONFIGS, FIX_GENERATOR_FAST, LLM_TIMEOUT
 from schemas.fix_response import FixResponse
 from schemas.response import AgentResponse
 from utils.token_tracker import TokenTracker
@@ -44,34 +42,90 @@ def _build_llm(config):
     )
 
 
-def run_review(code: str, fix: bool = False) -> dict:
+def run_review(
+    code: str,
+    fix: bool = False,
+    _agents: Optional[List] = None,
+    _fix_agent=None,
+) -> dict:
     """
-    Run all review agents on `code` and return the final LangGraph state.
+    Run all review agents on `code` and return the final state dict.
+
+    Bypasses LangGraph — agents run truly in parallel via ThreadPoolExecutor.
+    Applies RAG enrichment and optionally generates fixes.
+
+    _agents / _fix_agent: pass pre-built agents from main.py (with trackers).
+    When omitted, agents are created internally with fresh trackers.
 
     The returned dict contains:
       - results:      {agent_name: AgentResponse}
       - final_report: formatted report string
       - fix_result:   FixResponse if fix=True, else None
+      - trackers:     list of TokenTracker (empty when _agents were passed in)
     """
     cfg = AGENT_CONFIGS
-    trackers = {name: TokenTracker.from_config(name, model) for name, model in cfg.items()}
 
-    review_agents = [
-        InjectionAgent(llm=_build_llm(cfg["Injection Expert"]),     tracker=trackers["Injection Expert"]),
-        AuthAgent(     llm=_build_llm(cfg["Auth Expert"]),           tracker=trackers["Auth Expert"]),
-        SecretsAgent(  llm=_build_llm(cfg["Secrets Expert"]),        tracker=trackers["Secrets Expert"]),
-        PerformanceAgent(llm=_build_llm(cfg["Performance Expert"]),  tracker=trackers["Performance Expert"]),
-        QualityAgent(  llm=_build_llm(cfg["Code Quality Expert"]),   tracker=trackers["Code Quality Expert"]),
-    ]
+    if _agents is not None:
+        agents = _agents
+        trackers: List = []
+    else:
+        trackers_map = {name: TokenTracker.from_config(name, model) for name, model in cfg.items()}
+        agents = [
+            InjectionAgent(   llm=_build_llm(cfg["Injection Expert"]),   tracker=trackers_map["Injection Expert"]),
+            AuthAgent(        llm=_build_llm(cfg["Auth Expert"]),         tracker=trackers_map["Auth Expert"]),
+            SecretsAgent(     llm=_build_llm(cfg["Secrets Expert"]),      tracker=trackers_map["Secrets Expert"]),
+            PerformanceAgent( llm=_build_llm(cfg["Performance Expert"]),  tracker=trackers_map["Performance Expert"]),
+            QualityAgent(     llm=_build_llm(cfg["Code Quality Expert"]), tracker=trackers_map["Code Quality Expert"]),
+        ]
+        trackers = list(trackers_map.values())
 
-    fix_agent = FixGeneratorAgent(
+    fix_ag = _fix_agent if _fix_agent is not None else FixGeneratorAgent(
         llm=_build_llm(cfg["Fix Generator"]),
         fast_llm=_build_llm(FIX_GENERATOR_FAST),
-        tracker=trackers.get("Fix Generator"),
     )
 
-    graph = create_review_graph(review_agents, fix_agent)
-    return ReviewRunner(graph).run(code, fix=fix)
+    # True parallel execution — LangGraph 0.6 runs sync nodes sequentially,
+    # so we bypass it and manage the ThreadPoolExecutor directly.
+    pool = ThreadPoolExecutor(max_workers=len(agents))
+    future_to_name = {pool.submit(agent.review_code, code): agent.name for agent in agents}
+    done, not_done = _concurrent_wait(future_to_name.keys(), timeout=LLM_TIMEOUT + 0.5)
+    pool.shutdown(wait=False)
+
+    if not_done:
+        names = [future_to_name[f] for f in not_done]
+        logger.warning("Abandoned slow agents after %ds: %s", LLM_TIMEOUT, names)
+
+    empty = AgentResponse(reasoning="Timed out", findings=[], severity=0, confidence=0)
+    results: Dict[str, Optional[AgentResponse]] = {future_to_name[f]: empty for f in not_done}
+    for future in done:
+        name = future_to_name[future]
+        try:
+            results[name] = future.result()
+        except Exception as exc:
+            logger.error("[%s] agent failed: %s", name, exc)
+            results[name] = AgentResponse(
+                reasoning=f"Agent failed: {exc}", findings=[], severity=0, confidence=0,
+            )
+
+    # RAG enrichment — lazy import to avoid Chroma/vector-store cold start in webhook
+    from agents.rag import RagEnricher
+    results = RagEnricher().enrich(results)
+
+    fix_result: Optional[FixResponse] = None
+    if fix:
+        fix_result = fix_ag.generate_fixes(code, results)
+
+    from graph.report import generate_final_report
+    final_report = generate_final_report(results, fix_result)
+
+    return {
+        "code": code,
+        "results": results,
+        "fix_result": fix_result,
+        "final_report": final_report,
+        "fix_enabled": fix,
+        "trackers": trackers,
+    }
 
 
 def run_review_parallel(code: str) -> Dict[str, Optional[AgentResponse]]:
@@ -84,9 +138,6 @@ def run_review_parallel(code: str) -> Dict[str, Optional[AgentResponse]]:
     via shutdown(wait=False) and counted as empty (severity=0).  This bounds
     the entire review to at most LLM_TIMEOUT + 0.5s regardless of LLM latency.
     """
-    from concurrent.futures import wait as _wait, ALL_COMPLETED
-    from config import LLM_TIMEOUT
-
     cfg = AGENT_CONFIGS
     trackers = {name: TokenTracker.from_config(name, model) for name, model in cfg.items()}
 
@@ -101,8 +152,7 @@ def run_review_parallel(code: str) -> Dict[str, Optional[AgentResponse]]:
     pool = ThreadPoolExecutor(max_workers=len(agents))
     future_to_name = {pool.submit(agent.review_code, code): agent.name for agent in agents}
 
-    # Wait at most LLM_TIMEOUT + 0.5s for all agents; abandon stragglers.
-    done, not_done = _wait(future_to_name.keys(), timeout=LLM_TIMEOUT + 0.5)
+    done, not_done = _concurrent_wait(future_to_name.keys(), timeout=LLM_TIMEOUT + 0.5)
     pool.shutdown(wait=False)
 
     if not_done:
@@ -138,27 +188,26 @@ def run_review_multifile(file_contents: Dict[str, str]) -> Dict[str, Optional[Ag
     Results for each agent are merged across files: findings and locations are
     combined; severity and confidence take the maximum across files.
     """
-    from concurrent.futures import wait as _wait
-    from config import LLM_TIMEOUT
-
     if not file_contents:
         return {}
 
     cfg = AGENT_CONFIGS
-
-    def _make_agents() -> list:
-        return [
-            InjectionAgent(   llm=_build_llm(cfg["Injection Expert"])),
-            AuthAgent(        llm=_build_llm(cfg["Auth Expert"])),
-            SecretsAgent(     llm=_build_llm(cfg["Secrets Expert"])),
-            PerformanceAgent( llm=_build_llm(cfg["Performance Expert"])),
-            QualityAgent(     llm=_build_llm(cfg["Code Quality Expert"])),
-        ]
-
     agent_names = ["Injection Expert", "Auth Expert", "Secrets Expert",
                    "Performance Expert", "Code Quality Expert"]
 
-    # One fresh agent set per file keeps per-call state isolated.
+    # Build ONE set of shared LLM instances — ChatAnthropic/ChatOpenAI are
+    # stateless for HTTP calls so sharing across threads is safe.
+    shared_llms = {name: _build_llm(cfg[name]) for name in agent_names}
+
+    def _make_agents() -> list:
+        return [
+            InjectionAgent(   llm=shared_llms["Injection Expert"]),
+            AuthAgent(        llm=shared_llms["Auth Expert"]),
+            SecretsAgent(     llm=shared_llms["Secrets Expert"]),
+            PerformanceAgent( llm=shared_llms["Performance Expert"]),
+            QualityAgent(     llm=shared_llms["Code Quality Expert"]),
+        ]
+
     pool = ThreadPoolExecutor(max_workers=len(agent_names) * len(file_contents))
     future_to_key: dict = {}
 
@@ -169,14 +218,13 @@ def run_review_multifile(file_contents: Dict[str, str]) -> Dict[str, Optional[Ag
             future = pool.submit(agent.review_code, code)
             future_to_key[future] = (agent.name, path)
 
-    done, not_done = _wait(future_to_key.keys(), timeout=LLM_TIMEOUT + 0.5)
+    done, not_done = _concurrent_wait(future_to_key.keys(), timeout=LLM_TIMEOUT + 0.5)
     pool.shutdown(wait=False)
 
     if not_done:
         slow = [f"{future_to_key[f][0]}@{future_to_key[f][1]}" for f in not_done]
         logger.warning("Abandoned %d slow tasks after %ds: %s", len(not_done), LLM_TIMEOUT, slow)
 
-    # Collect completed results grouped by agent name
     per_agent: dict = {name: [] for name in agent_names}
     for future in done:
         agent_name, path = future_to_key[future]
@@ -187,7 +235,6 @@ def run_review_multifile(file_contents: Dict[str, str]) -> Dict[str, Optional[Ag
             resp = AgentResponse(reasoning=f"Failed: {exc}", findings=[], severity=0, confidence=0)
         per_agent[agent_name].append(resp)
 
-    # Merge per-file responses into one AgentResponse per agent
     empty = AgentResponse(reasoning="Timed out", findings=[], severity=0, confidence=0)
     results: Dict[str, Optional[AgentResponse]] = {}
 

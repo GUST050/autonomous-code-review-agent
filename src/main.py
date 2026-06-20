@@ -19,9 +19,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from agents import InjectionAgent, AuthAgent, SecretsAgent, QualityAgent, PerformanceAgent, FixGeneratorAgent
 from config import AGENT_CONFIGS, APPROVAL_THRESHOLD, FIX_GENERATOR_FAST
-from graph import create_review_graph
-from review import _build_llm
-from runner import ReviewRunner
+from review import _build_llm, run_review
 from utils import TokenTracker, combined_report, read_from_file, read_from_git_diff
 
 logger = logging.getLogger(__name__)
@@ -155,9 +153,7 @@ def main():
     print("-" * 70)
     print(f"Running parallel code review with {len(review_agents)} agents...\n")
 
-    graph = create_review_graph(review_agents, fix_agent)
-    runner = ReviewRunner(graph)
-    final_state = runner.run(code, fix=args.fix)
+    final_state = run_review(code, fix=args.fix, _agents=review_agents, _fix_agent=fix_agent)
 
     print(final_state.get("final_report", "No report generated."))
 

@@ -49,8 +49,8 @@ _GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")
 
 def _valid_signature(payload: bytes, signature: str) -> bool:
     if not _WEBHOOK_SECRET:
-        logger.warning("GITHUB_WEBHOOK_SECRET not set — skipping signature check")
-        return True
+        logger.error("GITHUB_WEBHOOK_SECRET not configured — rejecting all webhook requests")
+        return False
     expected = "sha256=" + hmac.new(
         _WEBHOOK_SECRET.encode(), payload, hashlib.sha256
     ).hexdigest()

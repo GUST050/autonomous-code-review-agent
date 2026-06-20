@@ -72,8 +72,14 @@ def create_review_graph(
 
     # ── RAG enrichment (fan-in after all parallel agents) ─────────────────
     _enricher = rag_enricher or RagEnricher()
+    _n_agents = len(review_agents)
 
     def rag_enrichment_node(state: ReviewState) -> dict:
+        # Guard: each review agent has an edge to this node, so it is called
+        # once per agent completion. Only enrich on the final call (when all
+        # agents have reported) to avoid 5× redundant enrichment passes.
+        if len(state.get("results", {})) < _n_agents:
+            return {}
         enriched = _enricher.enrich(dict(state.get("results", {})))
         return {"results": enriched}
 

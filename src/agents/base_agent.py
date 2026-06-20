@@ -120,7 +120,7 @@ class BaseAgent(ABC):
                 if isinstance(exc, TimeoutError):
                     logger.warning(
                         "[%s] Timed out after %ds — not retrying",
-                        self.name, LLM_TIMEOUT,
+                        self.name, timeout,
                     )
                     break
                 elif _is_rate_limit(exc):
