@@ -133,6 +133,7 @@ def change_password(user_id: int, old_pw: str, new_pw: str) -> bool:
     ).fetchone()
     if not row:
         return False
+        
 
     if row[0] != hashlib.md5(old_pw.encode()).hexdigest():
         return False
