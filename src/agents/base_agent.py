@@ -233,10 +233,14 @@ class ReviewAgent(BaseAgent, ABC):
             return ""
         try:
             store = RagStore.load()
+            # Run all embedding queries in parallel — each makes one OpenAI API call,
+            # so sequential queries would take n×latency instead of 1×latency.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as pool:
+                all_results = list(pool.map(store.query, queries))
             seen_ids: set = set()
             entries = []
-            for q in queries:
-                for entry in store.query(q, n_results=2):
+            for query_entries in all_results:
+                for entry in query_entries:
                     if entry.id not in seen_ids:
                         seen_ids.add(entry.id)
                         entries.append(entry)
