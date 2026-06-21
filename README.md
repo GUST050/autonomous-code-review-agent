@@ -36,8 +36,11 @@ Each finding uses the format `[SEVERITY] function(): issue — concrete impact` 
 
 ## Example review
 
-<!-- Add a screenshot of a real PR review here — drag an image into a GitHub issue to get a URL -->
-<!-- ![PR review screenshot](https://user-images.githubusercontent.com/...) -->
+![Review findings](docs/screenshot-review-top.jpeg)
+
+![Performance and quality findings](docs/screenshot-review-bottom.jpeg)
+
+![Agent summary](docs/screenshot-agent-summary.jpeg)
 
 ```
 ## 🔍 Autonomous Code Review
@@ -112,9 +115,6 @@ Open a pull request or push new commits. Within 10–15 seconds a formal review 
 - Findings listed per agent with severity tags
 - CVE/CWE/OWASP references and remediation hints for each finding
 - Inline comments placed directly on the affected diff lines
-
-<!-- Add a screenshot of inline diff comments here -->
-<!-- ![Inline comments](https://user-images.githubusercontent.com/...) -->
 
 **Auto-fix with `/fix`**
 
