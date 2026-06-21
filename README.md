@@ -77,6 +77,8 @@ References: CWE-259 | Hard-coded Password | OWASP A07:2021 | CVSS 9.8
 | Code Quality Expert  | 20/100   | 🟢     |
 ```
 
+> 💬 Comment `/fix` on the PR to get inline fix suggestions you can apply with one click.
+
 ---
 
 ## Setup
