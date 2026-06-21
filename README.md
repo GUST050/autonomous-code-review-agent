@@ -42,41 +42,6 @@ Each finding uses the format `[SEVERITY] function(): issue — concrete impact` 
 
 ![Agent summary](docs/screenshot-agent-summary.jpeg)
 
-```
-## 🔍 Autonomous Code Review
-
-🔴 18 critical issues found — severity 95/100
-
----
-### 🔴 Injection Expert — 95/100
-
-- 🔴 [CRITICAL] login(): SQL injection via f-string interpolation — attacker can bypass
-  authentication. Payload: username=' OR '1'='1 returns all users without valid credentials.
-
-References: CWE-89 | SQL Injection | OWASP A03:2021 | CVSS 9.8
-→ Use parameterized queries: conn.execute('SELECT ... WHERE id=?', (user_input,))
-
----
-### 🔴 Secrets Expert — 95/100
-
-- 🔴 [CRITICAL] DB_PASSWORD = "supersecret123" — hardcoded database credential exposed
-  in source code; anyone with read access can compromise the database.
-
-References: CWE-259 | Hard-coded Password | OWASP A07:2021 | CVSS 9.8
-→ Read passwords from environment variables or a secrets vault at runtime
-
----
-### Agent Summary
-
-| Agent                | Severity | Status |
-|----------------------|----------|--------|
-| Injection Expert     | 95/100   | 🔴     |
-| Auth Expert          | 95/100   | 🔴     |
-| Secrets Expert       | 95/100   | 🔴     |
-| Performance Expert   | 65/100   | 🟠     |
-| Code Quality Expert  | 20/100   | 🟢     |
-```
-
 > 💬 Comment `/fix` on the PR to get inline fix suggestions you can apply with one click.
 
 ---
