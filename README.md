@@ -34,6 +34,12 @@ Each finding uses the format `[SEVERITY] function(): issue — concrete impact` 
 
 ---
 
+## Demo
+
+[![Demo video](https://img.youtube.com/vi/TySXlmJw6hA/maxresdefault.jpg)](https://youtu.be/TySXlmJw6hA)
+
+---
+
 ## Example review
 
 ![Review findings](docs/screenshot-review-top.jpeg)
